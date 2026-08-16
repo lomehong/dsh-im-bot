@@ -2,7 +2,7 @@
 /**
  * dsh-im-bot one-command installer.
  *
- *   curl -fsSL https://raw.githubusercontent.com/ivorytower1026/dsh-im-bot/main/install.mjs | node
+ *   curl -fsSL https://raw.githubusercontent.com/lomehong/dsh-im-bot/main/install.mjs | node
  *
  * Idempotent: safe to re-run (e.g. to update). Edits the dsh web profile
  * manifest, then runs pnpm install in the profile directory.
@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const REPO = 'git+https://github.com/ivorytower1026/dsh-im-bot.git#main'
+const REPO = 'git+https://github.com/lomehong/dsh-im-bot.git#main'
 const PKGS = [
   { name: '@dsh-extra/im-channel', path: '/im-channel' },
   { name: '@dsh-extra/dsh-client-ui-settings-im', path: '/ui-settings-im' },

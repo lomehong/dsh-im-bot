@@ -28,10 +28,10 @@ dsh web
 ### 第二步：一条命令安装本插件
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ivorytower1026/dsh-im-bot/main/install.mjs | node
+curl -fsSL https://raw.githubusercontent.com/lomehong/dsh-im-bot/main/install.mjs | node
 ```
 
-（Windows PowerShell：`irm https://raw.githubusercontent.com/ivorytower1026/dsh-im-bot/main/install.mjs | node -`）
+（Windows PowerShell：`irm https://raw.githubusercontent.com/lomehong/dsh-im-bot/main/install.mjs | node -`）
 
 脚本会自动写入 web profile、安装两个包并注册 bundle，可重复执行（用于升级）。完成后重启 `dsh web` 即可。
 
@@ -49,8 +49,8 @@ curl -fsSL https://raw.githubusercontent.com/ivorytower1026/dsh-im-bot/main/inst
 
 ```sh
 cd ~/.dsh/profiles/web && pnpm add \
-  "git+https://github.com/ivorytower1026/dsh-im-bot.git#main&path:/im-channel" \
-  "git+https://github.com/ivorytower1026/dsh-im-bot.git#main&path:/ui-settings-im"
+  "git+https://github.com/lomehong/dsh-im-bot.git#main&path:/im-channel" \
+  "git+https://github.com/lomehong/dsh-im-bot.git#main&path:/ui-settings-im"
 ```
 
 然后把两个包名（`@dsh-extra/im-channel`、`@dsh-extra/dsh-client-ui-settings-im`）加入
@@ -82,6 +82,17 @@ cd ~/.dsh/profiles/web && pnpm add \
 你好           直接开始对话
 ```
 
+### 流式回复与打断
+
+对话过程实时同步到 IM，不再「黑屏等结果」：
+
+- **飞书**：每轮对话是一张不断刷新的 markdown 卡片 —— 先看到「正在思考…」，工具调用和文字段落边生成边上屏，结束后卡片定稿为完整回复（代码块带语法高亮）。
+- **微信**：过程按批次追加消息（协议不支持编辑已发消息），只发增量。
+- **打断**：agent 执行中直接发新消息即可打断当前任务并开始新输入，不需要先 `/停止`。
+- **会话恢复**：`dsh web` 重启后无需重新 `/bind`，绑定会话自动重连，历史上下文继续可用。
+
+回复详细程度（`/回复`）控制流式推送的粒度：**简洁**=过程只显示工具计数、只发最后一条 AI 消息；**标准**=文字段落边生成边推送（默认）；**详细**=工具调用过程 + 全部 AI 消息实时推送。
+
 ### 机器人命令
 
 | 命令 | 说明 |
@@ -92,17 +103,28 @@ cd ~/.dsh/profiles/web && pnpm add \
 | `/新建` 或 `/clear` | 清空上下文，开新任务 |
 | `/模型` / `/模型 N` | 查看 / 切换模型 |
 | `/思考 N` | 切换思考级别（按当前模型支持的级别列出） |
-| `/回复 N` | 回复详细程度：1 简洁 / 2 标准 / 3 详细 |
+| `/回复 N` | 流式推送详细程度：1 简洁 / 2 标准 / 3 详细 |
 | `/停止` | 中断正在执行的任务 |
 | `/状态` | 查看当前会话与模型 |
 | `/帮助` | 命令列表 |
 
-回复详细程度：**简洁**=只回最后一条 AI 消息，**标准**=回全部 AI 消息（默认），**详细**=附带工具调用过程。
+### 访问控制（可选）
+
+默认所有能给机器人发消息的用户都可对话。如需限制，在 `~/.dsh/settings.yaml` 的 `im-channel:` 节配置白名单：
+
+```yaml
+im-channel:
+  allowlist:
+    - ou_xxxxxxxx        # 飞书 open_id
+    - wechat:wx_yyyyyy   # 或 kind:userId 形式
+```
+
+不在名单内的消息会被静默忽略。飞书群聊中机器人只响应被 @ 的消息。
 
 ## 从源码开发
 
 ```sh
-git clone https://github.com/ivorytower1026/dsh-im-bot.git
+git clone https://github.com/lomehong/dsh-im-bot.git
 cd dsh-im-bot/im-channel && pnpm install && pnpm build
 cd ../ui-settings-im && pnpm install && pnpm build
 ```
