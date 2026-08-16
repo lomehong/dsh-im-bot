@@ -42,22 +42,29 @@ export class LoginApi {
 
   /** Register the /im-channel/login/* routes on the web server. */
   register(): void {
-    this.ctx.webServer.register({
+    // Narrow local view of the webServer service: the runtime name and the
+    // published typings' augmentation have drifted between harness versions
+    // (webServer locally, httpServer in older published rc's), so reach
+    // through a structural cast that compiles against both.
+    const web = (this.ctx as unknown as {
+      webServer: { register(route: { kind: 'exact'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void }): void }
+    }).webServer
+    web.register({
       kind: 'exact',
       path: '/im-channel/login/start',
       handler: (req: IncomingMessage, res: ServerResponse) => void this.handleStart(req, res),
     })
-    this.ctx.webServer.register({
+    web.register({
       kind: 'exact',
       path: '/im-channel/login/status',
-      handler: (req: IncomingMessage, res: ServerResponse) => this.handleStatus(res),
+      handler: (_req: IncomingMessage, res: ServerResponse) => this.handleStatus(res),
     })
-    this.ctx.webServer.register({
+    web.register({
       kind: 'exact',
       path: '/im-channel/bindings',
       handler: (_req: IncomingMessage, res: ServerResponse) => this.handleBindings(res),
     })
-    this.ctx.webServer.register({
+    web.register({
       kind: 'exact',
       path: '/im-channel/bindings/remove',
       handler: (req: IncomingMessage, res: ServerResponse) => void this.handleBindingRemove(req, res),

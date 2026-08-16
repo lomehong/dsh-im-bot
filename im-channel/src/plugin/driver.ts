@@ -3,18 +3,41 @@ import { isAbsolute, resolve } from 'node:path'
 import type { Agent, AgentOptions, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
-import type { AgentDriver } from '../core/router.ts'
+import type { AgentDriver, PromptOptions } from '../core/router.ts'
+import { interruptedNote, modeOf, renderFinal, renderLive, type VerbosityMode } from '../core/render.ts'
+
+/** Live-update cadence derived from the /回复 verbosity. */
+type TurnMode = VerbosityMode
 
 interface InflightTurn {
   resolve: (reply: string) => void
   reject: (error: Error) => void
+  /** Resolves once the turn has been resolved/rejected (interrupt barrier). */
+  settleResolve: () => void
+  settled: Promise<void>
   messageId: string
   turn: number | undefined
   /** Each assistant/message's text, one entry per message (verbosity 裁剪用). */
   messages: string[]
+  /** Unfinalized tail assembled from assistant/chunk text-delta events. */
+  partial: string
   /** Tool-call summaries in order (详细 verbosity). */
   toolLines: string[]
+  /** Count of tool/call events (简洁 status line). */
+  toolCount: number
+  /** Set when a newer prompt superseded this turn before it settled. */
+  interrupted: boolean
+  /** Guards resolve/reject against double settlement. */
+  ended: boolean
+  /** Live progress sink; absent = final-only (tests, future callers). */
+  onUpdate?: (view: string) => void
+  mode: TurnMode
+  /** Last view emitted, to skip no-op re-renders. */
+  lastView: string | undefined
 }
+
+/** How long a cancelled turn gets to settle before the new prompt forces through. */
+const INTERRUPT_SETTLE_TIMEOUT_MS = 8_000
 
 /**
  * AgentDriver over the in-process harness services: one agent per bound IM
@@ -53,9 +76,27 @@ export class HarnessDriver implements AgentDriver {
           .filter(block => block.type === 'text')
           .map(block => block.type === 'text' ? block.text : '')
           .join('')
-        if (text.length > 0) inflight.messages.push(text)
+        if (text.length > 0) {
+          inflight.messages.push(text)
+          inflight.partial = ''
+          this.emitView(inflight)
+        }
+      } else if ((event.type as string) === 'assistant/chunk') {
+        // Token-level stream of the message being generated: appending the
+        // text deltas to the partial makes live views type out in real time.
+        // The casts keep this compiling against dsh-session versions whose
+        // SessionEventMap predates chunk events.
+        const data = event.data as { turn?: number; chunk?: { type?: string; text?: string } }
+        const chunk = data.chunk
+        if (chunk?.type === 'text-delta' && typeof chunk.text === 'string' && chunk.text.length > 0
+          && (inflight.turn === undefined || inflight.turn === data.turn)) {
+          inflight.partial += chunk.text
+          this.emitView(inflight)
+        }
       } else if (event.type === 'tool/call') {
+        inflight.toolCount++
         inflight.toolLines.push(`🔧 ${event.data.name}`)
+        this.emitView(inflight)
       } else if (event.type === 'tool/result') {
         const content = event.data.message.content
         const brief = (Array.isArray(content) && content.length > 0 && typeof content[0] === 'object' && content[0] !== null && 'text' in content[0]
@@ -63,10 +104,10 @@ export class HarnessDriver implements AgentDriver {
           : '').split('\n')[0]?.slice(0, 80) ?? ''
         const failed = event.data.error !== undefined
         inflight.toolLines.push(`   ${failed ? '✗' : '✓'} ${brief}`)
+        this.emitView(inflight)
       } else if (event.type === 'turn/end' && inflight.turn === event.data.turn) {
         if (event.data.reason.kind === 'error') {
-          record.inflight = undefined
-          inflight.reject(new Error(`turn failed: ${JSON.stringify(event.data.reason)}`))
+          this.endTurn(record, inflight, { error: new Error(turnFailureText(event.data.reason)) })
         }
       }
     })
@@ -78,13 +119,49 @@ export class HarnessDriver implements AgentDriver {
   }
 
   async startSession(options: { cwd?: string } = {}): Promise<string> {
-    const rawCwd = options.cwd ?? this.options.cwd ?? process.cwd()
-    // Normalize separators/case (e.g. 'D:/x' vs 'D:\x') so the workspace
-    // registry's canonical-cwd index groups the session under its project
-    // instead of "ungrouped".
-    const cwd = isAbsolute(rawCwd) ? resolve(rawCwd) : rawCwd
+    const cwd = normalizeCwd(options.cwd ?? this.options.cwd ?? process.cwd())
     const sessionId = SessionId(`session-${crypto.randomUUID()}`)
-    const createOptions: { sessionId: typeof sessionId; meta: { cwd: string }; agentOptions?: AgentOptions } = {
+    await this.createAgent(sessionId, cwd)
+    process.stdout.write(`[im-channel] startSession ${sessionId.slice(0, 8)} cwd=${cwd} owned=${this.owned.size} (driver ${this.instanceId})\n`)
+    return sessionId
+  }
+
+  /** Whether this driver currently owns a live agent for the session id. */
+  has(sessionId: string): boolean {
+    return this.owned.has(sessionId)
+  }
+
+  /**
+   * Re-attach to a persisted session after a host restart. Bindings outlive
+   * the process; agents.resume loads the stored history (the session's
+   * original cwd/meta come from persistence) and re-composes the agent
+   * world through the same preset setup as create.
+   */
+  async resumeSession(sessionId: string, _options: { cwd?: string } = {}): Promise<string> {
+    if (this.owned.has(sessionId)) return sessionId
+    const presets = this.ctx.get('agentPresets')
+    // Same direct-creation caveat as startSession: spell the model route out
+    // or persona rendering fails on {{model}}.
+    const defaults = this.ctx.get('agentDefaultModel')
+    const selection = defaults === undefined ? undefined : defaults.currentSelection() as { provider: string; model: string }
+    const agentOptions = selection !== undefined && selection.provider !== '' && selection.model !== ''
+      ? { provider: selection.provider, model: selection.model } satisfies AgentOptions
+      : undefined
+    const handle = await this.agents.resume({
+      resumeSessionId: SessionId(sessionId),
+      ...agentOptions === undefined ? {} : { agentOptions },
+      setup: async agentCtx => {
+        if (presets !== undefined) await presets.mount(agentCtx, undefined)
+      },
+    })
+    this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined })
+    process.stdout.write(`[im-channel] resumeSession ${sessionId.slice(0, 15)}… owned=${this.owned.size} (driver ${this.instanceId})\n`)
+    return sessionId
+  }
+
+  /** Create (or resume) an agent with the gateway-equivalent composition. */
+  private async createAgent(sessionId: ReturnType<typeof SessionId>, cwd: string): Promise<void> {
+    const createOptions: { sessionId: ReturnType<typeof SessionId>; meta: { cwd: string }; agentOptions?: AgentOptions } = {
       sessionId,
       meta: { cwd },
     }
@@ -119,22 +196,24 @@ export class HarnessDriver implements AgentDriver {
       },
     })
     this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined })
+    await this.attachWorkspace(handle.agent.id, cwd)
+  }
+
+  /** Group the session under the workspace owning its cwd, when registered. */
+  private async attachWorkspace(sessionId: string, cwd: string): Promise<void> {
     // Web-created sessions attach to their workspace explicitly; agents.create
     // does not, so a session here would stay in "ungrouped" even with the
     // right cwd. Attach it to the workspace owning the cwd (if registered).
     const workspaces = this.ctx.get('workspaceRegistry') as
       | { resolveByPath(path: string): Promise<{ attachSession(sessionId: string): Promise<void> } | undefined> }
       | undefined
-    if (workspaces !== undefined) {
-      try {
-        const workspace = await workspaces.resolveByPath(cwd)
-        if (workspace !== undefined) await workspace.attachSession(handle.agent.id)
-      } catch {
-        // Path not resolvable or registry busy: session stays ungrouped.
-      }
+    if (workspaces === undefined) return
+    try {
+      const workspace = await workspaces.resolveByPath(cwd)
+      if (workspace !== undefined) await workspace.attachSession(sessionId)
+    } catch {
+      // Path not resolvable or registry busy: session stays ungrouped.
     }
-    process.stdout.write(`[im-channel] startSession ${handle.agent.id.slice(0, 8)} cwd=${createOptions.meta.cwd} model=${createOptions.agentOptions?.model ?? '?'} owned=${this.owned.size} (driver ${this.instanceId})\n`)
-    return handle.agent.id
   }
 
   /** Cancel the in-flight turn of a session; false when idle or unknown. */
@@ -145,50 +224,97 @@ export class HarnessDriver implements AgentDriver {
     return true
   }
 
-  prompt(sessionId: string, text: string, options: { verbosity?: string } = {}): Promise<string> {
-    const verbosity = options.verbosity
+  async prompt(sessionId: string, text: string, options: PromptOptions = {}): Promise<string> {
     const record = this.owned.get(sessionId)
     process.stdout.write(`[im-channel] prompt ${sessionId.slice(0, 8)} owned=${this.owned.size} found=${record !== undefined} (driver ${this.instanceId})\n`)
     if (record === undefined) {
       // A binding persisted across a harness restart points at a session this
       // driver never created — tell the router instead of crashing the host.
-      return Promise.reject(new Error(`会话 ${sessionId.slice(0, 8)} 已失效（服务重启过）。请发送 /bind 重新绑定。`))
+      throw new Error(`会话 ${sessionId.slice(0, 8)} 已失效（服务重启过）。请发送 /bind 重新绑定。`)
     }
-    if (record.inflight !== undefined) {
-      return Promise.reject(new Error('a prompt is already in flight for this session'))
+    // Mobile chat UX: new input interrupts the running turn instead of
+    // erroring. Cancel it, let the old promise settle with its partial
+    // output, then submit the new message.
+    const prior = record.inflight
+    if (prior !== undefined) {
+      prior.interrupted = true
+      try {
+        record.agent.cancel({ kind: 'user' })
+      } catch {
+        // Already-idle or disposed: the settle race below still works.
+      }
+      await Promise.race([prior.settled, sleep(INTERRUPT_SETTLE_TIMEOUT_MS)])
+      if (record.inflight === prior) {
+        // The cancel did not idle the agent in time (stuck tool). Force the
+        // old turn closed so its caller is not left hanging; the new
+        // followup queues in the inbox until the agent frees up.
+        this.endTurn(record, prior, { reply: renderFinal(prior.mode, prior.messages, prior.toolLines) })
+      }
     }
+    const mode = modeOf(options.verbosity)
     const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
-    return new Promise<string>((resolve, reject) => {
-      const inflight: InflightTurn = { resolve, reject, messageId: message.id, turn: undefined, messages: [], toolLines: [] }
+    return await new Promise<string>((resolve, reject) => {
+      let settleResolve!: () => void
+      const settled = new Promise<void>(resolveSettle => { settleResolve = resolveSettle })
+      const inflight: InflightTurn = {
+        resolve, reject, settleResolve, settled,
+        messageId: message.id, turn: undefined,
+        messages: [], partial: '', toolLines: [], toolCount: 0,
+        interrupted: false, ended: false,
+        ...(options.onUpdate !== undefined ? { onUpdate: options.onUpdate } : {}),
+        mode, lastView: undefined,
+      }
       record.inflight = inflight
       try {
         record.agent.followup(message)
       } catch (error: unknown) {
-        record.inflight = undefined
-        reject(error instanceof Error ? error : new Error(String(error)))
+        this.endTurn(record, inflight, { error: error instanceof Error ? error : new Error(String(error)) })
         return
       }
+      this.emitView(inflight)
       void record.agent.whenIdle().then(() => {
-        if (record.inflight !== inflight) return
-        record.inflight = undefined
-        inflight.resolve(renderTurn(inflight, verbosity))
+        this.endTurn(record, inflight, { reply: renderFinal(inflight.mode, inflight.messages, inflight.toolLines) })
       })
     })
   }
+
+  /** Push the current turn view to the live sink, skipping no-op renders. */
+  private emitView(inflight: InflightTurn): void {
+    const sink = inflight.onUpdate
+    if (sink === undefined || inflight.ended) return
+    const view = renderLive(inflight.mode, inflight.messages, inflight.toolLines, inflight.toolCount, inflight.partial)
+    if (view === inflight.lastView) return
+    inflight.lastView = view
+    sink(view)
+  }
+
+  /** Resolve/reject a turn exactly once and clear its slot. */
+  private endTurn(record: { agent: Agent; inflight: InflightTurn | undefined }, inflight: InflightTurn, outcome: { reply?: string; error?: Error }): void {
+    if (inflight.ended) return
+    inflight.ended = true
+    if (record.inflight === inflight) record.inflight = undefined
+    inflight.settleResolve()
+    if (outcome.error !== undefined) {
+      inflight.reject(outcome.error)
+      return
+    }
+    const partial = outcome.reply ?? ''
+    inflight.resolve(inflight.interrupted ? interruptedNote(partial) : partial)
+  }
 }
 
-/**
- * Render one finished turn's collected output at the user's verbosity level:
- * 简洁 = only the LAST assistant text message; 标准 = every assistant text
- * message; 详细 = tool calls/results plus every assistant text message.
- */
-function renderTurn(inflight: InflightTurn, verbosity: string | undefined): string {
-  if (verbosity === '简洁') return inflight.messages.at(-1) ?? ''
-  if (verbosity === '详细') {
-    const parts: string[] = []
-    if (inflight.toolLines.length > 0) parts.push(inflight.toolLines.join('\n'), '──────────')
-    parts.push(...inflight.messages)
-    return parts.join('\n')
-  }
-  return inflight.messages.join('\n\n')
+function normalizeCwd(rawCwd: string): string {
+  // Normalize separators/case (e.g. 'D:/x' vs 'D:\x') so the workspace
+  // registry's canonical-cwd index groups the session under its project
+  // instead of "ungrouped".
+  return isAbsolute(rawCwd) ? resolve(rawCwd) : rawCwd
+}
+
+function turnFailureText(reason: unknown): string {
+  const text = JSON.stringify(reason)
+  return `turn failed: ${text === undefined ? String(reason) : text.slice(0, 300)}`
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }

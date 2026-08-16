@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { ImChannel, ImUserId, InboundMessage, OutboundMessage, ReplyTarget } from '../../core/channel.ts'
+import type { ImChannel, ImUserId, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../../core/channel.ts'
 
 const FIXED_BASE_URL = 'https://ilinkai.weixin.qq.com'
 const DEFAULT_ILINK_BOT_TYPE = '3'
@@ -201,6 +201,8 @@ export class WechatChannel implements ImChannel {
   private readonly seenMessageIds = new Set<string>()
   /** from|text → last-seen timestamp; 30s window backstop against redelivery. */
   private readonly recentFingerprints = new Map<string, number>()
+  /** Dead-channel watchers (the router logs these loudly). */
+  private deadHandlers: Array<(reason: string) => void> = []
   private static readonly SEEN_LIMIT = 500
 
   constructor(private readonly options: WechatChannelOptions = {}) {}
@@ -229,6 +231,26 @@ export class WechatChannel implements ImChannel {
 
   onMessage(handler: (message: InboundMessage) => void): void {
     this.handler = handler
+  }
+
+  /** Notify when the long-poll loop exits for good (token stale, etc.). */
+  onDead(handler: (reason: string) => void): void {
+    this.deadHandlers.push(handler)
+  }
+
+  private reportDead(reason: string): void {
+    for (const handler of this.deadHandlers) handler(reason)
+  }
+
+  /**
+   * Open a live turn. iLink has no message-editing API, so progress streams
+   * as periodic appended messages carrying only the not-yet-seen delta.
+   */
+  openTurn(target: ReplyTarget, options: { mode: TurnMode }): Promise<TurnSink> {
+    return Promise.resolve(new WechatTurnSink(target, options.mode, {
+      send: (text: string) => this.send(target, { text }),
+      log: (line: string) => this.ctxLog(line),
+    }))
   }
 
   async send(_target: ReplyTarget, message: OutboundMessage): Promise<void> {
@@ -288,6 +310,7 @@ export class WechatChannel implements ImChannel {
         // account for an hour; hammering the endpoint escalates rate-limiting.
         if (resp.errcode === -14 || resp.ret === -14) {
           this.ctxLog('wechat token stale (errcode=-14) — 需要重新扫码登录，暂停轮询')
+          this.reportDead('微信机器人凭证已失效（errcode=-14），需要重新扫码登录；在设置 → 手机连接里重新扫码即可恢复')
           return
         }
         const isApiError = (resp.ret !== undefined && resp.ret !== 0) || (resp.errcode !== undefined && resp.errcode !== 0)
@@ -354,4 +377,99 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       reject(new Error('aborted'))
     }, { once: true })
   })
+}
+
+/** Minimum spacing between wechat delta flushes (protocol politeness). */
+const WECHAT_FLUSH_MS = 3_000
+
+/**
+ * Live turn over iLink: no editing, so each flush appends one message with
+ * the content the user has not seen yet. quiet mode stays silent until the
+ * final reply (a status line every few seconds would be pure noise).
+ */
+class WechatTurnSink implements TurnSink {
+  private view = ''
+  private lastSent = ''
+  private timer: NodeJS.Timeout | undefined
+  private finished = false
+  private sending = false
+
+  constructor(
+    private readonly target: ReplyTarget,
+    private readonly mode: TurnMode,
+    private readonly io: {
+      send: (text: string) => Promise<void>
+      log: (line: string) => void
+    },
+  ) {}
+
+  update(view: string): void {
+    if (this.finished) return
+    this.view = view
+    if (this.mode !== 'quiet' && this.timer === undefined) {
+      this.timer = setTimeout(() => { void this.flush() }, WECHAT_FLUSH_MS)
+      this.timer.unref?.()
+    }
+  }
+
+  async finish(final: { text: string; markdown?: boolean }): Promise<void> {
+    if (this.finished) return
+    this.finished = true
+    this.stopTimer()
+    try {
+      if (this.mode === 'quiet') {
+        // Nothing streamed; deliver the final reply whole.
+        await this.io.send(final.text)
+        return
+      }
+      const delta = final.text.startsWith(this.lastSent) ? final.text.slice(this.lastSent.length) : final.text
+      if (delta.trim().length > 0) await this.io.send(delta)
+      this.lastSent = final.text
+    } catch (error) {
+      this.io.log(`wechat 终稿下发失败: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async fail(message: string): Promise<void> {
+    if (this.finished) return
+    this.finished = true
+    this.stopTimer()
+    try {
+      await this.io.send(message)
+    } catch (error) {
+      this.io.log(`wechat 失败提示下发失败: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private stopTimer(): void {
+    if (this.timer !== undefined) {
+      clearTimeout(this.timer)
+      this.timer = undefined
+    }
+  }
+
+  private async flush(): Promise<void> {
+    this.timer = undefined
+    if (this.finished || this.sending || this.mode === 'quiet') return
+    const view = this.view
+    // Views are append-only snapshots; ship only the new tail.
+    const delta = view.startsWith(this.lastSent) ? view.slice(this.lastSent.length) : view
+    if (delta.trim().length === 0) {
+      this.lastSent = view
+      return
+    }
+    this.sending = true
+    try {
+      await this.io.send(delta)
+      this.lastSent = view
+    } catch (error) {
+      this.io.log(`wechat 流式增量下发失败（下轮重试）: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      this.sending = false
+      if (!this.finished) {
+        this.timer = setTimeout(() => { void this.flush() }, WECHAT_FLUSH_MS)
+        this.timer.unref?.()
+      }
+    }
+  }
 }

@@ -25,6 +25,8 @@ export interface ChannelInstanceConfig {
 export interface ImChannelSection {
   channels: Record<string, ChannelInstanceConfig>
   commandPrefix: string
+  /** Allowed IM user ids (or `kind:userId`); empty = everyone allowed. */
+  allowlist: string[]
 }
 
 const KindUnion = z.union(['feishu', 'wechat'])
@@ -38,6 +40,7 @@ const InstanceSchema = z.object({
 export const Config = z.object({
   channels: z.dict(InstanceSchema).default({}),
   commandPrefix: z.string().default('/'),
+  allowlist: z.array(z.string()).default([]),
 }) as unknown as z<ImChannelSection>
 
 function isCredentialled(kind: ChannelKind): boolean {
@@ -52,7 +55,7 @@ function buildChannel(kind: ChannelKind, ctx: Context): ImChannel {
   const log = (line: string): void => { process.stdout.write(`[im-channel] ${line}\n`) }
   switch (kind) {
     case 'wechat': return new WechatChannel({ ctxLog: log })
-    case 'feishu': return new FeishuChannel()
+    case 'feishu': return new FeishuChannel({ log })
   }
 }
 
@@ -69,9 +72,10 @@ export function apply(ctx: Context, config: ImChannelSection): void {
   // edits, instance reconciliation) must not orphan bound sessions — the
   // driver's owned-session map is what /bind hands out.
   const driver = new HarnessDriver(ctx, {})
-  // One bind store for the whole plugin lifetime: the bound-session rows
-  // must survive router rebuilds, and /bind hands out new sessions from it.
-  const store = new BindStore()
+  // One bind store for the whole plugin lifetime (and process-shared with
+  // the login HTTP API): the bound-session rows must survive router
+  // rebuilds, and /bind hands out new sessions from it.
+  const store = BindStore.shared
 
   installSettingsSection(ctx, NS, Config, config, {
     setSource: (source) => { current = source() },
@@ -107,6 +111,12 @@ export function apply(ctx: Context, config: ImChannelSection): void {
         driver,
         store,
         config: { commandPrefix: next.commandPrefix },
+        log: (line: string): void => { ctx.logger.info(line) },
+        allowed: (from): boolean => {
+          const list = current.allowlist
+          if (list === undefined || list.length === 0) return true
+          return list.includes(from.userId) || list.includes(`${from.kind}:${from.userId}`)
+        },
         status: (): RouterStatus => {
           const selection = ctx.get('agentDefaultModel')
           if (selection !== undefined) {
