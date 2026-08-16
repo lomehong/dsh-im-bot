@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/core", "src/channels", "tests"],
+  "exclude": ["src/channels/feishu/login-bridge.ts", "src/channels/wechat/login-bridge.ts"]
+}
