@@ -3,13 +3,22 @@
  * mark. Selecting a card starts a QR login via the im-channel host routes;
  * the detail area below splits into the QR (left) and the
  * platform-specific operation steps (right).
+ *
+ * The bindings list polls every 10s while the tab is visible and pauses on
+ * `visibilitychange:hidden` so a backgrounded browser tab doesn't keep
+ * hammering the host routes.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import type { Kind } from './store.ts'
 import { FeishuMark, WechatMark } from './platform-marks.tsx'
-import { qrSvgDataUrl } from './qr.ts'
 import css from './BotChannelTab.module.css'
+import { QrPanel, type LoginStatus } from './QrPanel.tsx'
+import { StepsPanel } from './StepsPanel.tsx'
+import { PassphraseCard } from './PassphraseCard.tsx'
+import { BindingsTable, type BindingRow } from './BindingsTable.tsx'
+
+export type { LoginStatus, BindingRow }
 
 /** Injected dependencies (slot `inject`). */
 export interface BotChannelTabInjected {
@@ -19,25 +28,8 @@ export interface BotChannelTabInjected {
 /** Props delivered by the slot outlet. */
 export type BotChannelTabProps = Partial<BotChannelTabInjected>
 
-interface LoginStatus {
-  kind: Kind
-  status: 'pending' | 'confirmed' | 'error'
-  qrUrl: string | undefined
-  error: string | undefined
-}
-
-interface BindingRow {
-  kind: Kind
-  boundAt: string
-  sessionId: string
-}
-
 const POLL_INTERVAL_MS = 1500
-
-const KIND_LABELS: Record<Kind, string> = {
-  wechat: '微信',
-  feishu: '飞书',
-}
+const BINDINGS_POLL_INTERVAL_MS = 10_000
 
 const CARD_MARKS = {
   wechat: WechatMark,
@@ -51,7 +43,9 @@ export function BotChannelTab(props: BotChannelTabProps) {
   const [login, setLogin] = useState<LoginStatus | undefined>(undefined)
   const [startError, setStartError] = useState<string | undefined>(undefined)
   const [bindings, setBindings] = useState<BindingRow[]>([])
-  const pollTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
+  const [active, setActive] = useState<boolean>(typeof document === 'undefined' || !document.hidden)
+  const loginPollTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
+  const bindingsPollTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
 
   const refreshBindings = async (): Promise<void> => {
     try {
@@ -78,25 +72,54 @@ export function BotChannelTab(props: BotChannelTabProps) {
     }
   }
 
+  /** Start the bindings poll loop; idempotent — clears any existing one first. */
+  const startBindingsPolling = (): void => {
+    if (bindingsPollTimer.current !== undefined) return
+    bindingsPollTimer.current = setInterval(() => { void refreshBindings() }, BINDINGS_POLL_INTERVAL_MS)
+  }
+
+  const stopBindingsPolling = (): void => {
+    if (bindingsPollTimer.current === undefined) return
+    clearInterval(bindingsPollTimer.current)
+    bindingsPollTimer.current = undefined
+  }
+
   useEffect(() => {
     // Bindings load on tab open (list + per-card counts), and the WeChat card
     // is pre-selected so its QR is already up when the tab opens.
     void refreshBindings()
     selectCard('wechat')
-    const interval = setInterval(() => { void refreshBindings() }, 10_000)
-    return () => { clearInterval(interval); if (pollTimer.current !== undefined) clearInterval(pollTimer.current) }
+    startBindingsPolling()
+    // Pause the bindings poll while the tab is backgrounded: a hidden page
+    // keeps polling anyway and that wastes a round-trip per minute for no UX
+    // benefit. visibilitychange is the spec'd signal.
+    const onVisibility = (): void => {
+      const visible = !document.hidden
+      setActive(visible)
+      if (visible) {
+        void refreshBindings()
+        startBindingsPolling()
+      } else {
+        stopBindingsPolling()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      stopBindingsPolling()
+      if (loginPollTimer.current !== undefined) clearInterval(loginPollTimer.current)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const stopPolling = (): void => {
-    if (pollTimer.current !== undefined) {
-      clearInterval(pollTimer.current)
-      pollTimer.current = undefined
-    }
+  const stopLoginPolling = (): void => {
+    if (loginPollTimer.current === undefined) return
+    clearInterval(loginPollTimer.current)
+    loginPollTimer.current = undefined
   }
 
   const selectCard = (kind: Kind): void => {
-    stopPolling()
+    stopLoginPolling()
     setSelected(kind)
     setLogin(undefined)
     setStartError(undefined)
@@ -122,14 +145,14 @@ export function BotChannelTab(props: BotChannelTabProps) {
       setStartError(error instanceof Error ? error.message : String(error))
       return
     }
-    pollTimer.current = setInterval(() => { void pollStatus() }, POLL_INTERVAL_MS)
+    loginPollTimer.current = setInterval(() => { void pollStatus() }, POLL_INTERVAL_MS)
   }
 
   // Re-trigger a fresh login for the currently selected platform: retire the
   // old poll loop, drop back to the loading state, and fetch a new QR.
   const refreshQr = (): void => {
     if (selected === undefined) return
-    stopPolling()
+    stopLoginPolling()
     setStartError(undefined)
     setLogin({ kind: selected, status: 'pending', qrUrl: undefined, error: undefined })
     void startLogin(selected)
@@ -142,13 +165,13 @@ export function BotChannelTab(props: BotChannelTabProps) {
       if (!body.ok || body.session === null) return
       setLogin(body.session)
       if (body.session.status === 'confirmed') {
-        stopPolling()
+        stopLoginPolling()
         // Scan confirmed: the bind command card appears right after a
         // successful login.
         void refreshBindings()
       }
       if (body.session.status === 'error') {
-        stopPolling()
+        stopLoginPolling()
       }
     } catch {
       // Transient fetch failure: keep polling; the TTL on the host side ends it.
@@ -159,10 +182,6 @@ export function BotChannelTab(props: BotChannelTabProps) {
     { kind: 'wechat', label: t('card.wechat') },
     { kind: 'feishu', label: t('card.feishu') },
   ]
-
-  const stepKeys: Array<`step.${Kind}.${1 | 2 | 3 | 4}` | `note.${Kind}.${1 | 2 | 3 | 4}`> = selected === undefined
-    ? []
-    : (['1', '2', '3', '4'] as const).flatMap(n => [`step.${selected}.${n}`, `note.${selected}.${n}`] as Array<`step.${Kind}.${typeof n}` | `note.${Kind}.${typeof n}`>)
 
   return (
     <div className={css.section}>
@@ -191,94 +210,18 @@ export function BotChannelTab(props: BotChannelTabProps) {
 
       {selected !== undefined && (
         <div className={css.detail}>
-          <div className={css.qrPanel} data-state={login?.status ?? (startError !== undefined ? 'error' : 'pending')}>
-            {startError !== undefined && <p role="alert" className={css.qrError}>{startError}</p>}
-            {startError === undefined && login?.qrUrl === undefined && (
-              <div className={css.qrSpinner}>
-                <span className={css.qrSpinnerRing} />
-                <span>{t('qr.waiting')}</span>
-              </div>
-            )}
-            {login?.qrUrl !== undefined && (
-              <div className={css.qrClickArea}>
-                <button
-                  type="button"
-                  className={css.qrRefreshButton}
-                  onClick={refreshQr}
-                  aria-label={t('qr.refresh')}
-                  title={t('qr.refresh')}
-                >
-                  <img
-                    className={css.qrImage}
-                    src={qrSvgDataUrl(login.qrUrl)}
-                    alt={t('qr.alt')}
-                    width={240}
-                    height={240}
-                  />
-                </button>
-                <span className={css.qrRefreshHint}>{t('qr.refreshHint')}</span>
-              </div>
-            )}
-            {login?.status === 'confirmed' && <p className={css.qrOk}>{t('qr.confirmed')}</p>}
-            {login?.status === 'error' && <p role="alert" className={css.qrError}>{login.error}</p>}
-          </div>
-
-          <div className={css.stepsPanel}>
-            <h3 className={css.stepsTitle}>{t(`steps.title.${selected}`)}</h3>
-            <ol className={css.steps}>
-              {stepKeys.length > 0 && stepKeys.map(key => key.startsWith('step.')
-                ? (
-                    <li key={key} className={css.step}>
-                      <span className={css.stepNumber} aria-hidden="true" />
-                      <span className={css.stepBody}>
-                        <span className={css.stepText}>{t(key)}</span>
-                      </span>
-                    </li>
-                  )
-                : null)}
-            </ol>
-            {selected === 'wechat' && <p className={css.stepNote}>{t('note.wechat.verifycode')}</p>}
-          </div>
+          <QrPanel login={login} startError={startError} t={t} onRefresh={refreshQr} />
+          <StepsPanel kind={selected} t={t} />
         </div>
       )}
-      {login?.status === 'confirmed' && (
-        <div className={css.passphraseCard}>
-          <span className={css.passphraseTitle}>{t('bind.commandTitle')}</span>
-          <span className={css.passphraseHint}>{t('bind.commandHint')}</span>
-          <code className={css.passphraseCommand}>/bind</code>
-        </div>
-      )}
+      {login?.status === 'confirmed' && <PassphraseCard t={t} />}
 
-      <div className={css.bindings}>
-        <h3 className={css.bindingsTitle}>{t('bindings.title')}（{bindings.length}）</h3>
-        {bindings.length === 0 && <p className={css.bindingsEmpty}>{t('bindings.empty')}</p>}
-        {bindings.length > 0 && (
-          <table className={css.bindingsTable}>
-            <thead>
-              <tr>
-                <th>{t('bindings.kind')}</th>
-                <th>{t('bindings.session')}</th>
-                <th>{t('bindings.boundAt')}</th>
-                <th aria-hidden="true" />
-              </tr>
-            </thead>
-            <tbody>
-              {bindings.map((row, index) => (
-                <tr key={`${row.kind}:${row.sessionId}:${index}`}>
-                  <td><span className={css.bindingKind}>{KIND_LABELS[row.kind] ?? row.kind}</span></td>
-                  <td className={css.bindingSession}>{row.sessionId}</td>
-                  <td>{row.boundAt.replace('T', ' ').slice(0, 19)}</td>
-                  <td>
-                    <button type="button" className={css.bindingRemove} onClick={() => { void removeBinding(row) }}>
-                      {t('bindings.remove')}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <BindingsTable
+        bindings={bindings}
+        t={t}
+        onRemove={row => { void removeBinding(row) }}
+      />
+      {!active && <p className={css.bindingsEmpty}>{t('bindings.paused')}</p>}
     </div>
   )
 }
