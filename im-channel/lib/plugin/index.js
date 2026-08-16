@@ -18,6 +18,7 @@ const InstanceSchema = z.object({
 export const Config = z.object({
     channels: z.dict(InstanceSchema).default({}),
     commandPrefix: z.string().default('/'),
+    allowlist: z.array(z.string()).default([]),
 });
 function isCredentialled(kind) {
     switch (kind) {
@@ -30,7 +31,7 @@ function buildChannel(kind, ctx) {
     const log = (line) => { process.stdout.write(`[im-channel] ${line}\n`); };
     switch (kind) {
         case 'wechat': return new WechatChannel({ ctxLog: log });
-        case 'feishu': return new FeishuChannel();
+        case 'feishu': return new FeishuChannel({ log });
     }
 }
 export function apply(ctx, config) {
@@ -45,9 +46,10 @@ export function apply(ctx, config) {
     // edits, instance reconciliation) must not orphan bound sessions — the
     // driver's owned-session map is what /bind hands out.
     const driver = new HarnessDriver(ctx, {});
-    // One bind store for the whole plugin lifetime: the bound-session rows
-    // must survive router rebuilds, and /bind hands out new sessions from it.
-    const store = new BindStore();
+    // One bind store for the whole plugin lifetime (and process-shared with
+    // the login HTTP API): the bound-session rows must survive router
+    // rebuilds, and /bind hands out new sessions from it.
+    const store = BindStore.shared;
     installSettingsSection(ctx, NS, Config, config, {
         setSource: (source) => { current = source(); },
         onChange: () => {
@@ -85,6 +87,13 @@ export function apply(ctx, config) {
                 driver,
                 store,
                 config: { commandPrefix: next.commandPrefix },
+                log: (line) => { ctx.logger.info(line); },
+                allowed: (from) => {
+                    const list = current.allowlist;
+                    if (list === undefined || list.length === 0)
+                        return true;
+                    return list.includes(from.userId) || list.includes(`${from.kind}:${from.userId}`);
+                },
                 status: () => {
                     const selection = ctx.get('agentDefaultModel');
                     if (selection !== undefined) {

@@ -146,6 +146,8 @@ export class WechatChannel {
     seenMessageIds = new Set();
     /** from|text → last-seen timestamp; 30s window backstop against redelivery. */
     recentFingerprints = new Map();
+    /** Dead-channel watchers (the router logs these loudly). */
+    deadHandlers = [];
     static SEEN_LIMIT = 500;
     constructor(options = {}) {
         this.options = options;
@@ -173,6 +175,24 @@ export class WechatChannel {
     }
     onMessage(handler) {
         this.handler = handler;
+    }
+    /** Notify when the long-poll loop exits for good (token stale, etc.). */
+    onDead(handler) {
+        this.deadHandlers.push(handler);
+    }
+    reportDead(reason) {
+        for (const handler of this.deadHandlers)
+            handler(reason);
+    }
+    /**
+     * Open a live turn. iLink has no message-editing API, so progress streams
+     * as periodic appended messages carrying only the not-yet-seen delta.
+     */
+    openTurn(target, options) {
+        return Promise.resolve(new WechatTurnSink(target, options.mode, {
+            send: (text) => this.send(target, { text }),
+            log: (line) => this.ctxLog(line),
+        }));
     }
     async send(_target, message) {
         const credentials = loadWechatCredentials();
@@ -233,6 +253,7 @@ export class WechatChannel {
                 // account for an hour; hammering the endpoint escalates rate-limiting.
                 if (resp.errcode === -14 || resp.ret === -14) {
                     this.ctxLog('wechat token stale (errcode=-14) — 需要重新扫码登录，暂停轮询');
+                    this.reportDead('微信机器人凭证已失效（errcode=-14），需要重新扫码登录；在设置 → 手机连接里重新扫码即可恢复');
                     return;
                 }
                 const isApiError = (resp.ret !== undefined && resp.ret !== 0) || (resp.errcode !== undefined && resp.errcode !== 0);
@@ -308,4 +329,100 @@ function sleep(ms, signal) {
             reject(new Error('aborted'));
         }, { once: true });
     });
+}
+/** Minimum spacing between wechat delta flushes (protocol politeness). */
+const WECHAT_FLUSH_MS = 3_000;
+/**
+ * Live turn over iLink: no editing, so each flush appends one message with
+ * the content the user has not seen yet. quiet mode stays silent until the
+ * final reply (a status line every few seconds would be pure noise).
+ */
+class WechatTurnSink {
+    target;
+    mode;
+    io;
+    view = '';
+    lastSent = '';
+    timer;
+    finished = false;
+    sending = false;
+    constructor(target, mode, io) {
+        this.target = target;
+        this.mode = mode;
+        this.io = io;
+    }
+    update(view) {
+        if (this.finished)
+            return;
+        this.view = view;
+        if (this.mode !== 'quiet' && this.timer === undefined) {
+            this.timer = setTimeout(() => { void this.flush(); }, WECHAT_FLUSH_MS);
+            this.timer.unref?.();
+        }
+    }
+    async finish(final) {
+        if (this.finished)
+            return;
+        this.finished = true;
+        this.stopTimer();
+        try {
+            if (this.mode === 'quiet') {
+                // Nothing streamed; deliver the final reply whole.
+                await this.io.send(final.text);
+                return;
+            }
+            const delta = final.text.startsWith(this.lastSent) ? final.text.slice(this.lastSent.length) : final.text;
+            if (delta.trim().length > 0)
+                await this.io.send(delta);
+            this.lastSent = final.text;
+        }
+        catch (error) {
+            this.io.log(`wechat 终稿下发失败: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+    async fail(message) {
+        if (this.finished)
+            return;
+        this.finished = true;
+        this.stopTimer();
+        try {
+            await this.io.send(message);
+        }
+        catch (error) {
+            this.io.log(`wechat 失败提示下发失败: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+    stopTimer() {
+        if (this.timer !== undefined) {
+            clearTimeout(this.timer);
+            this.timer = undefined;
+        }
+    }
+    async flush() {
+        this.timer = undefined;
+        if (this.finished || this.sending || this.mode === 'quiet')
+            return;
+        const view = this.view;
+        // Views are append-only snapshots; ship only the new tail.
+        const delta = view.startsWith(this.lastSent) ? view.slice(this.lastSent.length) : view;
+        if (delta.trim().length === 0) {
+            this.lastSent = view;
+            return;
+        }
+        this.sending = true;
+        try {
+            await this.io.send(delta);
+            this.lastSent = view;
+        }
+        catch (error) {
+            this.io.log(`wechat 流式增量下发失败（下轮重试）: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        finally {
+            this.sending = false;
+            if (!this.finished) {
+                this.timer = setTimeout(() => { void this.flush(); }, WECHAT_FLUSH_MS);
+                this.timer.unref?.();
+            }
+        }
+    }
 }

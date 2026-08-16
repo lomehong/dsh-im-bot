@@ -46,6 +46,28 @@ export interface ReplyTarget {
     readonly targetId: string;
 }
 /**
+ * How chatty a live turn's intermediate updates should be. Derived from the
+ * user's /回复 verbosity: 简洁=quiet, 标准=normal, 详细=verbose.
+ */
+export type TurnMode = 'quiet' | 'normal' | 'verbose';
+/**
+ * A live outbound reply the channel can render while the agent works.
+ * update() carries a full snapshot of the turn so far and is fire-and-forget;
+ * implementations throttle to their platform's rate limits. Exactly one of
+ * finish()/fail() ends the turn; no update() follows them.
+ */
+export interface TurnSink {
+    /** Render an intermediate view of the turn (full snapshot each call). */
+    update(view: string): void;
+    /** The turn finished; final full content, markdown where supported. */
+    finish(final: {
+        text: string;
+        markdown?: boolean;
+    }): Promise<void>;
+    /** The turn failed; message is already user-facing. */
+    fail(message: string): Promise<void>;
+}
+/**
  * One IM platform adapter. A capability-seam style interface: each platform
  * implements connect/onMessage/send/login; routing and binding are shared
  * core and never live in a channel.
@@ -62,6 +84,20 @@ export interface ImChannel {
     onMessage(handler: (message: InboundMessage) => void): void;
     /** Send a reply to a captured target. */
     send(target: ReplyTarget, message: OutboundMessage): Promise<void>;
+    /**
+     * Open a live updatable reply for one agent turn. Channels whose platform
+     * cannot edit sent messages may still batch updates into periodic sends;
+     * channels that cannot stream at all omit this and the router falls back
+     * to send-on-final only.
+     */
+    openTurn?(target: ReplyTarget, options: {
+        mode: TurnMode;
+    }): Promise<TurnSink>;
+    /**
+     * Watch for permanent channel death (invalidated credentials, unrecoverable
+     * protocol state). Optional; the router logs these loudly.
+     */
+    onDead?(handler: (reason: string) => void): void;
     /** Release the connection; no further handler invocations after resolve. */
     stop(): Promise<void>;
 }

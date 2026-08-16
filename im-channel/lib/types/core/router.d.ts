@@ -6,12 +6,25 @@ import type { ImChannel, InboundMessage } from './channel.ts';
 export interface AgentDriver {
     /** Create a new session (or resume) and return its id. */
     startSession(options?: SessionOptions): Promise<string>;
-    /** Send a user message into a session and await the assistant's final reply. */
-    prompt(sessionId: string, text: string, options?: {
-        verbosity?: string;
-    }): Promise<string>;
-    /** Optional progress sink for long-running turns (tool calls, partial output). */
-    onProgress?(sessionId: string, update: string): void;
+    /** Whether this driver currently owns a live agent for the session id. */
+    has?(sessionId: string): boolean;
+    /**
+     * Re-attach to a persisted session after a host restart (bindings outlive
+     * the process). Throws when the session cannot be resurrected.
+     */
+    resumeSession?(sessionId: string, options?: SessionOptions): Promise<string>;
+    /**
+     * Send a user message into a session and await the assistant's final
+     * reply. While the turn runs, onUpdate fires with full snapshots of the
+     * turn so far (already filtered to the caller's verbosity), letting the
+     * router stream progress to the channel instead of going silent.
+     */
+    prompt(sessionId: string, text: string, options?: PromptOptions): Promise<string>;
+}
+export interface PromptOptions {
+    verbosity?: string;
+    /** Live progress sink: full snapshot of the turn so far, verbosity-filtered. */
+    onUpdate?(view: string): void;
 }
 /** Per-session knobs a /新建 or /bind session can carry. */
 export interface SessionOptions {
@@ -69,6 +82,13 @@ export interface RouterDeps {
         id: string;
         name: string;
     }>>;
+    /** Diagnostic sink (wired to the host logger); absent = silent. */
+    readonly log?: (line: string) => void;
+    /**
+     * Access gate consulted for every inbound message; absent = everyone
+     * allowed. Rejected senders are ignored silently (no probe surface).
+     */
+    readonly allowed?: (from: InboundMessage['from']) => boolean;
 }
 /** BindStore surface the router needs (subset of BindStore for testing). */
 export interface BindStoreLike {
@@ -85,6 +105,8 @@ export interface BindStoreLike {
     selectWorkspace?(ref: InboundMessage['from'], path: string): void;
     /** The user's chosen workspace path, if any; optional. */
     workspaceFor?(ref: InboundMessage['from']): string | undefined;
+    /** Remember where to reach the user for proactive sends; optional. */
+    rememberTarget?(ref: InboundMessage['from'], targetId: string): void;
 }
 export declare class Router {
     private readonly deps;
@@ -94,9 +116,14 @@ export declare class Router {
     /** The wired channels (readonly view for topology reconciliation). */
     readonly channels: readonly ImChannel[];
     constructor(deps: RouterDeps);
+    private log;
     /** Wire all channels' inbound handlers to routeMessage and connect them. */
     start(): Promise<void>;
     stop(): Promise<void>;
+    /** channel.send that can never reject into an unhandled rejection. */
+    private safeSend;
+    /** Open a live turn sink, falling back to send-on-final when unsupported. */
+    private openSink;
     /** Route one inbound message: commands first, then bound-session chat. */
     private routeMessage;
     /** Handle slash commands (Chinese primary, English aliases). */

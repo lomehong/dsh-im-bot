@@ -5,7 +5,7 @@
  *
  * MIT license notice: portions Copyright (C) 2026 Tencent. All rights reserved.
  */
-import type { ImChannel, InboundMessage, OutboundMessage, ReplyTarget } from '../../core/channel.ts';
+import type { ImChannel, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../../core/channel.ts';
 declare const DEFAULT_ILINK_BOT_TYPE = "3";
 export { DEFAULT_ILINK_BOT_TYPE };
 /** Channel credentials persisted at ~/.dsh/im-channel/credentials/wechat.json. */
@@ -42,12 +42,24 @@ export declare class WechatChannel implements ImChannel {
     private readonly seenMessageIds;
     /** from|text → last-seen timestamp; 30s window backstop against redelivery. */
     private readonly recentFingerprints;
+    /** Dead-channel watchers (the router logs these loudly). */
+    private deadHandlers;
     private static readonly SEEN_LIMIT;
     constructor(options?: WechatChannelOptions);
     private ctxLog;
     isConfigured(): boolean;
     connect(): Promise<void>;
     onMessage(handler: (message: InboundMessage) => void): void;
+    /** Notify when the long-poll loop exits for good (token stale, etc.). */
+    onDead(handler: (reason: string) => void): void;
+    private reportDead;
+    /**
+     * Open a live turn. iLink has no message-editing API, so progress streams
+     * as periodic appended messages carrying only the not-yet-seen delta.
+     */
+    openTurn(target: ReplyTarget, options: {
+        mode: TurnMode;
+    }): Promise<TurnSink>;
     send(_target: ReplyTarget, message: OutboundMessage): Promise<void>;
     stop(): Promise<void>;
     /** Long-poll loop modeled on upstream monitorWeixinProvider. */

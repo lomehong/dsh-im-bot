@@ -1,6 +1,9 @@
 import { isAbsolute, resolve } from 'node:path';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { SessionId } from '@deepseek-ai/dsh-session';
+import { interruptedNote, modeOf, renderFinal, renderLive } from "../core/render.js";
+/** How long a cancelled turn gets to settle before the new prompt forces through. */
+const INTERRUPT_SETTLE_TIMEOUT_MS = 8_000;
 /**
  * AgentDriver over the in-process harness services: one agent per bound IM
  * user, prompt via followup + whenIdle, replies assembled from
@@ -43,11 +46,29 @@ export class HarnessDriver {
                     .filter(block => block.type === 'text')
                     .map(block => block.type === 'text' ? block.text : '')
                     .join('');
-                if (text.length > 0)
+                if (text.length > 0) {
                     inflight.messages.push(text);
+                    inflight.partial = '';
+                    this.emitView(inflight);
+                }
+            }
+            else if (event.type === 'assistant/chunk') {
+                // Token-level stream of the message being generated: appending the
+                // text deltas to the partial makes live views type out in real time.
+                // The casts keep this compiling against dsh-session versions whose
+                // SessionEventMap predates chunk events.
+                const data = event.data;
+                const chunk = data.chunk;
+                if (chunk?.type === 'text-delta' && typeof chunk.text === 'string' && chunk.text.length > 0
+                    && (inflight.turn === undefined || inflight.turn === data.turn)) {
+                    inflight.partial += chunk.text;
+                    this.emitView(inflight);
+                }
             }
             else if (event.type === 'tool/call') {
+                inflight.toolCount++;
                 inflight.toolLines.push(`🔧 ${event.data.name}`);
+                this.emitView(inflight);
             }
             else if (event.type === 'tool/result') {
                 const content = event.data.message.content;
@@ -56,11 +77,11 @@ export class HarnessDriver {
                     : '').split('\n')[0]?.slice(0, 80) ?? '';
                 const failed = event.data.error !== undefined;
                 inflight.toolLines.push(`   ${failed ? '✗' : '✓'} ${brief}`);
+                this.emitView(inflight);
             }
             else if (event.type === 'turn/end' && inflight.turn === event.data.turn) {
                 if (event.data.reason.kind === 'error') {
-                    record.inflight = undefined;
-                    inflight.reject(new Error(`turn failed: ${JSON.stringify(event.data.reason)}`));
+                    this.endTurn(record, inflight, { error: new Error(turnFailureText(event.data.reason)) });
                 }
             }
         });
@@ -72,12 +93,47 @@ export class HarnessDriver {
         });
     }
     async startSession(options = {}) {
-        const rawCwd = options.cwd ?? this.options.cwd ?? process.cwd();
-        // Normalize separators/case (e.g. 'D:/x' vs 'D:\x') so the workspace
-        // registry's canonical-cwd index groups the session under its project
-        // instead of "ungrouped".
-        const cwd = isAbsolute(rawCwd) ? resolve(rawCwd) : rawCwd;
+        const cwd = normalizeCwd(options.cwd ?? this.options.cwd ?? process.cwd());
         const sessionId = SessionId(`session-${crypto.randomUUID()}`);
+        await this.createAgent(sessionId, cwd);
+        process.stdout.write(`[im-channel] startSession ${sessionId.slice(0, 8)} cwd=${cwd} owned=${this.owned.size} (driver ${this.instanceId})\n`);
+        return sessionId;
+    }
+    /** Whether this driver currently owns a live agent for the session id. */
+    has(sessionId) {
+        return this.owned.has(sessionId);
+    }
+    /**
+     * Re-attach to a persisted session after a host restart. Bindings outlive
+     * the process; agents.resume loads the stored history (the session's
+     * original cwd/meta come from persistence) and re-composes the agent
+     * world through the same preset setup as create.
+     */
+    async resumeSession(sessionId, _options = {}) {
+        if (this.owned.has(sessionId))
+            return sessionId;
+        const presets = this.ctx.get('agentPresets');
+        // Same direct-creation caveat as startSession: spell the model route out
+        // or persona rendering fails on {{model}}.
+        const defaults = this.ctx.get('agentDefaultModel');
+        const selection = defaults === undefined ? undefined : defaults.currentSelection();
+        const agentOptions = selection !== undefined && selection.provider !== '' && selection.model !== ''
+            ? { provider: selection.provider, model: selection.model }
+            : undefined;
+        const handle = await this.agents.resume({
+            resumeSessionId: SessionId(sessionId),
+            ...agentOptions === undefined ? {} : { agentOptions },
+            setup: async (agentCtx) => {
+                if (presets !== undefined)
+                    await presets.mount(agentCtx, undefined);
+            },
+        });
+        this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });
+        process.stdout.write(`[im-channel] resumeSession ${sessionId.slice(0, 15)}… owned=${this.owned.size} (driver ${this.instanceId})\n`);
+        return sessionId;
+    }
+    /** Create (or resume) an agent with the gateway-equivalent composition. */
+    async createAgent(sessionId, cwd) {
         const createOptions = {
             sessionId,
             meta: { cwd },
@@ -115,22 +171,24 @@ export class HarnessDriver {
             },
         });
         this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });
+        await this.attachWorkspace(handle.agent.id, cwd);
+    }
+    /** Group the session under the workspace owning its cwd, when registered. */
+    async attachWorkspace(sessionId, cwd) {
         // Web-created sessions attach to their workspace explicitly; agents.create
         // does not, so a session here would stay in "ungrouped" even with the
         // right cwd. Attach it to the workspace owning the cwd (if registered).
         const workspaces = this.ctx.get('workspaceRegistry');
-        if (workspaces !== undefined) {
-            try {
-                const workspace = await workspaces.resolveByPath(cwd);
-                if (workspace !== undefined)
-                    await workspace.attachSession(handle.agent.id);
-            }
-            catch {
-                // Path not resolvable or registry busy: session stays ungrouped.
-            }
+        if (workspaces === undefined)
+            return;
+        try {
+            const workspace = await workspaces.resolveByPath(cwd);
+            if (workspace !== undefined)
+                await workspace.attachSession(sessionId);
         }
-        process.stdout.write(`[im-channel] startSession ${handle.agent.id.slice(0, 8)} cwd=${createOptions.meta.cwd} model=${createOptions.agentOptions?.model ?? '?'} owned=${this.owned.size} (driver ${this.instanceId})\n`);
-        return handle.agent.id;
+        catch {
+            // Path not resolvable or registry busy: session stays ungrouped.
+        }
     }
     /** Cancel the in-flight turn of a session; false when idle or unknown. */
     cancel(sessionId) {
@@ -140,53 +198,98 @@ export class HarnessDriver {
         record.agent.cancel({ kind: 'user' });
         return true;
     }
-    prompt(sessionId, text, options = {}) {
-        const verbosity = options.verbosity;
+    async prompt(sessionId, text, options = {}) {
         const record = this.owned.get(sessionId);
         process.stdout.write(`[im-channel] prompt ${sessionId.slice(0, 8)} owned=${this.owned.size} found=${record !== undefined} (driver ${this.instanceId})\n`);
         if (record === undefined) {
             // A binding persisted across a harness restart points at a session this
             // driver never created — tell the router instead of crashing the host.
-            return Promise.reject(new Error(`会话 ${sessionId.slice(0, 8)} 已失效（服务重启过）。请发送 /bind 重新绑定。`));
+            throw new Error(`会话 ${sessionId.slice(0, 8)} 已失效（服务重启过）。请发送 /bind 重新绑定。`);
         }
-        if (record.inflight !== undefined) {
-            return Promise.reject(new Error('a prompt is already in flight for this session'));
+        // Mobile chat UX: new input interrupts the running turn instead of
+        // erroring. Cancel it, let the old promise settle with its partial
+        // output, then submit the new message.
+        const prior = record.inflight;
+        if (prior !== undefined) {
+            prior.interrupted = true;
+            try {
+                record.agent.cancel({ kind: 'user' });
+            }
+            catch {
+                // Already-idle or disposed: the settle race below still works.
+            }
+            await Promise.race([prior.settled, sleep(INTERRUPT_SETTLE_TIMEOUT_MS)]);
+            if (record.inflight === prior) {
+                // The cancel did not idle the agent in time (stuck tool). Force the
+                // old turn closed so its caller is not left hanging; the new
+                // followup queues in the inbox until the agent frees up.
+                this.endTurn(record, prior, { reply: renderFinal(prior.mode, prior.messages, prior.toolLines) });
+            }
         }
+        const mode = modeOf(options.verbosity);
         const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } });
-        return new Promise((resolve, reject) => {
-            const inflight = { resolve, reject, messageId: message.id, turn: undefined, messages: [], toolLines: [] };
+        return await new Promise((resolve, reject) => {
+            let settleResolve;
+            const settled = new Promise(resolveSettle => { settleResolve = resolveSettle; });
+            const inflight = {
+                resolve, reject, settleResolve, settled,
+                messageId: message.id, turn: undefined,
+                messages: [], partial: '', toolLines: [], toolCount: 0,
+                interrupted: false, ended: false,
+                ...(options.onUpdate !== undefined ? { onUpdate: options.onUpdate } : {}),
+                mode, lastView: undefined,
+            };
             record.inflight = inflight;
             try {
                 record.agent.followup(message);
             }
             catch (error) {
-                record.inflight = undefined;
-                reject(error instanceof Error ? error : new Error(String(error)));
+                this.endTurn(record, inflight, { error: error instanceof Error ? error : new Error(String(error)) });
                 return;
             }
+            this.emitView(inflight);
             void record.agent.whenIdle().then(() => {
-                if (record.inflight !== inflight)
-                    return;
-                record.inflight = undefined;
-                inflight.resolve(renderTurn(inflight, verbosity));
+                this.endTurn(record, inflight, { reply: renderFinal(inflight.mode, inflight.messages, inflight.toolLines) });
             });
         });
     }
-}
-/**
- * Render one finished turn's collected output at the user's verbosity level:
- * 简洁 = only the LAST assistant text message; 标准 = every assistant text
- * message; 详细 = tool calls/results plus every assistant text message.
- */
-function renderTurn(inflight, verbosity) {
-    if (verbosity === '简洁')
-        return inflight.messages.at(-1) ?? '';
-    if (verbosity === '详细') {
-        const parts = [];
-        if (inflight.toolLines.length > 0)
-            parts.push(inflight.toolLines.join('\n'), '──────────');
-        parts.push(...inflight.messages);
-        return parts.join('\n');
+    /** Push the current turn view to the live sink, skipping no-op renders. */
+    emitView(inflight) {
+        const sink = inflight.onUpdate;
+        if (sink === undefined || inflight.ended)
+            return;
+        const view = renderLive(inflight.mode, inflight.messages, inflight.toolLines, inflight.toolCount, inflight.partial);
+        if (view === inflight.lastView)
+            return;
+        inflight.lastView = view;
+        sink(view);
     }
-    return inflight.messages.join('\n\n');
+    /** Resolve/reject a turn exactly once and clear its slot. */
+    endTurn(record, inflight, outcome) {
+        if (inflight.ended)
+            return;
+        inflight.ended = true;
+        if (record.inflight === inflight)
+            record.inflight = undefined;
+        inflight.settleResolve();
+        if (outcome.error !== undefined) {
+            inflight.reject(outcome.error);
+            return;
+        }
+        const partial = outcome.reply ?? '';
+        inflight.resolve(inflight.interrupted ? interruptedNote(partial) : partial);
+    }
+}
+function normalizeCwd(rawCwd) {
+    // Normalize separators/case (e.g. 'D:/x' vs 'D:\x') so the workspace
+    // registry's canonical-cwd index groups the session under its project
+    // instead of "ungrouped".
+    return isAbsolute(rawCwd) ? resolve(rawCwd) : rawCwd;
+}
+function turnFailureText(reason) {
+    const text = JSON.stringify(reason);
+    return `turn failed: ${text === undefined ? String(reason) : text.slice(0, 300)}`;
+}
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }

@@ -13,6 +13,8 @@ export interface ChannelInstanceConfig {
 export interface ImChannelSection {
     channels: Record<string, ChannelInstanceConfig>;
     commandPrefix: string;
+    /** Allowed IM user ids (or `kind:userId`); empty = everyone allowed. */
+    allowlist: string[];
 }
 export declare const Config: z<ImChannelSection>;
 export declare function apply(ctx: Context, config: ImChannelSection): void;

@@ -10,8 +10,26 @@ export interface Binding {
     verbosity?: '简洁' | '标准' | '详细';
     /** Workspace path chosen via /项目; new sessions start here. */
     workspace?: string;
+    /** Last chat target the user wrote from (Feishu chat_id, ...); enables proactive sends after restarts. */
+    lastTargetId?: string;
 }
+/**
+ * Binding store with an in-memory cache and debounced persistence. All
+ * mutations go through this class so concurrent message handling cannot
+ * interleave read-modify-write cycles on the file. A process-shared
+ * singleton keeps the login HTTP API and the router on the same cache.
+ */
 export declare class BindStore {
+    private cache;
+    private flushTimer;
+    /** The process-wide store; the router and login API must share one cache. */
+    static readonly shared: BindStore;
+    /** Loaded rows (lazily read from disk once per process). */
+    private rows;
+    private scheduleFlush;
+    /** Flush pending mutations now (used by tests and shutdown paths). */
+    flushSync(): void;
+    private findRow;
     /** Bind an IM user to a harness session. Rebinding replaces the old row. */
     bind(ref: ImUserRef, sessionId: string): void;
     /** Look up the bound session id for an IM user. */
@@ -28,6 +46,14 @@ export declare class BindStore {
     selectWorkspace(ref: ImUserRef, path: string): void;
     /** The user's chosen workspace path, if any. */
     workspaceFor(ref: ImUserRef): string | undefined;
+    /** Remember where to reach the user (chat_id / user id) for proactive sends. */
+    rememberTarget(ref: ImUserRef, targetId: string): void;
+    /** The user's last known chat target, if any. */
+    targetIdFor(ref: ImUserRef): string | undefined;
+    /** Internal rows access for the module-level status/remove helpers. */
+    rowsForListing(): readonly Binding[];
+    /** Remove the row at an index obtained from rowsForListing(). */
+    removeAt(index: number): void;
 }
 /** List all persisted binding rows (for status surfaces). */
 export declare function listBindings(): Array<{
