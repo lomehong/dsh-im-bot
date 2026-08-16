@@ -26,8 +26,25 @@ const FLUSH_DELAY_MS = 400;
 export class BindStore {
     cache;
     flushTimer;
+    /** Whether this process has wired a shutdown hook for pending flushes. */
+    static shutdownRegistered = false;
     /** The process-wide store; the router and login API must share one cache. */
     static shared = new BindStore();
+    constructor() {
+        // Persist debounced mutations when the process is asked to exit cleanly.
+        // beforeExit fires once the event loop drains; combined with flushTimer's
+        // unref() above, no handler keeps the loop alive on its own. Idempotent
+        // across the multiple instances tests construct.
+        if (!BindStore.shutdownRegistered) {
+            BindStore.shutdownRegistered = true;
+            const flushOnExit = () => { BindStore.shared.flushSync(); };
+            process.once('beforeExit', flushOnExit);
+            // SIGTERM is what systemd / Docker send; SIGINT is what ^C sends.
+            // beforeExit may not fire if something else keeps the loop busy.
+            process.once('SIGTERM', flushOnExit);
+            process.once('SIGINT', flushOnExit);
+        }
+    }
     /** Loaded rows (lazily read from disk once per process). */
     rows() {
         if (this.cache === undefined)

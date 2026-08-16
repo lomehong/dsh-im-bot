@@ -38,13 +38,22 @@ export declare class WechatChannel implements ImChannel {
     private abort;
     /** context_token per user; must be echoed on every outbound send. */
     private readonly contextTokens;
+    /** Last-seen timestamp per user; lets us prune contextTokens for inactive users. */
+    private readonly contextTokenActivity;
     /** Recently seen message ids; the server redelivers on cursor re-sync. */
     private readonly seenMessageIds;
     /** from|text → last-seen timestamp; 30s window backstop against redelivery. */
     private readonly recentFingerprints;
     /** Dead-channel watchers (the router logs these loudly). */
     private deadHandlers;
+    private pruneTimer;
     private static readonly SEEN_LIMIT;
+    /** Bound context-token table; above this we evict the least-recently-active user. */
+    private static readonly CONTEXT_TOKEN_LIMIT;
+    /** Drop context tokens for users idle longer than this. */
+    private static readonly CONTEXT_TOKEN_TTL_MS;
+    /** Redelivery-window length for fingerprints; entries older than this are pruned. */
+    private static readonly FINGERPRINT_WINDOW_MS;
     constructor(options?: WechatChannelOptions);
     private ctxLog;
     isConfigured(): boolean;
@@ -62,6 +71,9 @@ export declare class WechatChannel implements ImChannel {
     }): Promise<TurnSink>;
     send(_target: ReplyTarget, message: OutboundMessage): Promise<void>;
     stop(): Promise<void>;
+    /** Prune unbounded lookup maps: drop context tokens idle past TTL, evict
+     *  LRU entries past the size cap, and sweep fingerprint window entries. */
+    private pruneStale;
     /** Long-poll loop modeled on upstream monitorWeixinProvider. */
     private monitorLoop;
 }

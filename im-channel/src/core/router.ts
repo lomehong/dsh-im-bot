@@ -1,4 +1,5 @@
 import type { ImChannel, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from './channel.ts'
+import { modeOf } from './render.ts'
 
 /**
  * Harness-side conversation driver implemented by the plugin glue that
@@ -219,7 +220,7 @@ export class Router {
       }
     }
     const verbosity = this.deps.store.verbosityFor?.(message.from)
-    const sink = await this.openSink(channel, target, turnModeOf(verbosity))
+    const sink = await this.openSink(channel, target, modeOf(verbosity))
     try {
       const promptOptions: PromptOptions = {}
       if (verbosity !== undefined) promptOptions.verbosity = verbosity
@@ -306,12 +307,13 @@ export class Router {
           return
         }
         const list = await this.deps.models?.() ?? []
-        const choice = Number.parseInt(args[0] ?? '', 10)
-        const picked = Number.isInteger(choice) && choice >= 1 && choice <= list.length
-          ? list[choice - 1]
-          : args[0].includes('/')
-            ? (() => { const [provider, model] = args[0].split('/'); return { provider, model, label: model } })()
-            : { provider: current.provider, model: args[0], label: args[0] }
+        const rawArg = args[0] ?? ''
+        const choice = Number.parseInt(rawArg, 10)
+        const picked: { provider: string; model: string; label: string } = Number.isInteger(choice) && choice >= 1 && choice <= list.length
+          ? list[choice - 1]!
+          : rawArg.includes('/')
+            ? (() => { const [provider, model] = rawArg.split('/'); return { provider: provider ?? '', model: model ?? rawArg, label: model ?? rawArg } })()
+            : { provider: current.provider, model: rawArg, label: rawArg }
         await this.deps.setDefaultModel({ provider: picked.provider, model: picked.model })
         await this.safeSend(channel, target, { text: `✅ 模型已切换：${picked.model}（${picked.provider}）。发送 /新建 后生效。` })
         return
@@ -348,12 +350,13 @@ export class Router {
           await this.safeSend(channel, target, { text: [header, '──────────────────', ...list, '──────────────────', '发送 /思考 N 选择。'].join('\n') })
           return
         }
-        const choice = Number.parseInt(args[0] ?? '', 10)
+        const rawArg = args[0] ?? ''
+        const choice = Number.parseInt(rawArg, 10)
         const picked = Number.isInteger(choice) && choice >= 1 && choice <= levels.length
           ? levels[choice - 1]
-          : levels.find(l => l.id === args[0] || l.name.toLowerCase() === args[0].toLowerCase())
+          : levels.find(l => l.id === rawArg || l.name.toLowerCase() === rawArg.toLowerCase())
         if (picked === undefined) {
-          await this.safeSend(channel, target, { text: [header, '──────────────────', ...list, '──────────────────', `无效选择 ${args[0]}。发送 /思考 N 选择。`].join('\n') })
+          await this.safeSend(channel, target, { text: [header, '──────────────────', ...list, '──────────────────', `无效选择 ${rawArg}。发送 /思考 N 选择。`].join('\n') })
           return
         }
         await this.deps.setDefaultModel({ reasoningEffort: picked.id })
@@ -375,10 +378,11 @@ export class Router {
           await this.safeSend(channel, target, { text: lines.join('\n') })
           return
         }
-        const choice = Number.parseInt(args[0] ?? '', 10)
+        const rawArg = args[0] ?? ''
+        const choice = Number.parseInt(rawArg, 10)
         const picked = Number.isInteger(choice) && choice >= 1 && choice <= list.length
           ? list[choice - 1]
-          : list.find(w => w.path === args[0] || w.title === args.slice(0).join(' '))
+          : list.find(w => w.path === rawArg || w.title === args.join(' '))
         if (picked === undefined) {
           await this.safeSend(channel, target, { text: `无效选择。发送 /项目 查看列表。` })
           return
@@ -431,13 +435,6 @@ export class Router {
         await this.safeSend(channel, target, { text: `⚠️ 未知命令 /${rawCommand}。\n\n${COMMAND_LIST}` })
     }
   }
-}
-
-/** /回复 verbosity → live-update mode for channel turn sinks. */
-function turnModeOf(verbosity: string | undefined): TurnMode {
-  if (verbosity === '简洁') return 'quiet'
-  if (verbosity === '详细') return 'verbose'
-  return 'normal'
 }
 
 function messageOf(error: unknown): string {

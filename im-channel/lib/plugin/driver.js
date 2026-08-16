@@ -96,7 +96,7 @@ export class HarnessDriver {
         const cwd = normalizeCwd(options.cwd ?? this.options.cwd ?? process.cwd());
         const sessionId = SessionId(`session-${crypto.randomUUID()}`);
         await this.createAgent(sessionId, cwd);
-        process.stdout.write(`[im-channel] startSession ${sessionId.slice(0, 8)} cwd=${cwd} owned=${this.owned.size} (driver ${this.instanceId})\n`);
+        this.ctx.logger?.info?.(`startSession ${sessionId.slice(0, 8)} cwd=${cwd} owned=${this.owned.size} (driver ${this.instanceId})`);
         return sessionId;
     }
     /** Whether this driver currently owns a live agent for the session id. */
@@ -129,7 +129,7 @@ export class HarnessDriver {
             },
         });
         this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });
-        process.stdout.write(`[im-channel] resumeSession ${sessionId.slice(0, 15)}… owned=${this.owned.size} (driver ${this.instanceId})\n`);
+        this.ctx.logger?.info?.(`resumeSession ${sessionId.slice(0, 15)}… owned=${this.owned.size} (driver ${this.instanceId})`);
         return sessionId;
     }
     /** Create (or resume) an agent with the gateway-equivalent composition. */
@@ -200,7 +200,7 @@ export class HarnessDriver {
     }
     async prompt(sessionId, text, options = {}) {
         const record = this.owned.get(sessionId);
-        process.stdout.write(`[im-channel] prompt ${sessionId.slice(0, 8)} owned=${this.owned.size} found=${record !== undefined} (driver ${this.instanceId})\n`);
+        this.ctx.logger?.debug?.(`prompt ${sessionId.slice(0, 8)} owned=${this.owned.size} found=${record !== undefined} (driver ${this.instanceId})`);
         if (record === undefined) {
             // A binding persisted across a harness restart points at a session this
             // driver never created — tell the router instead of crashing the host.

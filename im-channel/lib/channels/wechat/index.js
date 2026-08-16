@@ -142,13 +142,22 @@ export class WechatChannel {
     abort;
     /** context_token per user; must be echoed on every outbound send. */
     contextTokens = new Map();
+    /** Last-seen timestamp per user; lets us prune contextTokens for inactive users. */
+    contextTokenActivity = new Map();
     /** Recently seen message ids; the server redelivers on cursor re-sync. */
     seenMessageIds = new Set();
     /** from|text → last-seen timestamp; 30s window backstop against redelivery. */
     recentFingerprints = new Map();
     /** Dead-channel watchers (the router logs these loudly). */
     deadHandlers = [];
+    pruneTimer;
     static SEEN_LIMIT = 500;
+    /** Bound context-token table; above this we evict the least-recently-active user. */
+    static CONTEXT_TOKEN_LIMIT = 5_000;
+    /** Drop context tokens for users idle longer than this. */
+    static CONTEXT_TOKEN_TTL_MS = 30 * 60_000;
+    /** Redelivery-window length for fingerprints; entries older than this are pruned. */
+    static FINGERPRINT_WINDOW_MS = 30_000;
     constructor(options = {}) {
         this.options = options;
     }
@@ -163,6 +172,11 @@ export class WechatChannel {
         if (credentials === undefined)
             throw new Error('微信通道未登录：运行 im-channel 登录流程（终端二维码扫码）');
         this.abort = new AbortController();
+        // Bound the unbounded lookup maps: contextTokens, contextTokenActivity and
+        // recentFingerprints would otherwise grow without limit on a long-running
+        // bot. The interval is unref'd so it never keeps the process alive.
+        this.pruneTimer = setInterval(() => { this.pruneStale(); }, 60_000);
+        this.pruneTimer.unref?.();
         // Server expects an explicit session start; without it long-polls are not
         // held and the account can be rate-limited into errcode=-14.
         try {
@@ -171,7 +185,15 @@ export class WechatChannel {
         catch (error) {
             this.ctxLog(`wechat notifystart failed: ${error instanceof Error ? error.message : String(error)}`);
         }
-        void this.monitorLoop(credentials);
+        // The monitor loop runs forever and intentionally sleeps on backoff. On
+        // stop(), the AbortSignal fires and the in-flight sleep rejects with
+        // 'aborted' — swallow that one case so we don't log an unhandled
+        // rejection. Anything else is a real loop crash worth surfacing.
+        this.monitorLoop(credentials).catch(error => {
+            if (this.abort?.signal.aborted)
+                return;
+            this.ctxLog(`wechat monitor loop crashed: ${error instanceof Error ? error.message : String(error)}`);
+        });
     }
     onMessage(handler) {
         this.handler = handler;
@@ -236,7 +258,38 @@ export class WechatChannel {
                 // Best-effort: the process may be exiting.
             }
         }
+        if (this.pruneTimer !== undefined) {
+            clearInterval(this.pruneTimer);
+            this.pruneTimer = undefined;
+        }
         this.abort?.abort();
+    }
+    /** Prune unbounded lookup maps: drop context tokens idle past TTL, evict
+     *  LRU entries past the size cap, and sweep fingerprint window entries. */
+    pruneStale() {
+        const now = Date.now();
+        // TTL: drop tokens for users who haven't messaged in a while.
+        for (const [userId, lastSeen] of this.contextTokenActivity) {
+            if (now - lastSeen > WechatChannel.CONTEXT_TOKEN_TTL_MS) {
+                this.contextTokenActivity.delete(userId);
+                this.contextTokens.delete(userId);
+            }
+        }
+        // Size cap: evict the least-recently-active user when over the limit.
+        if (this.contextTokens.size > WechatChannel.CONTEXT_TOKEN_LIMIT) {
+            const overflow = this.contextTokens.size - WechatChannel.CONTEXT_TOKEN_LIMIT;
+            const sorted = [...this.contextTokenActivity.entries()].sort((a, b) => a[1] - b[1]);
+            for (let i = 0; i < overflow && i < sorted.length; i++) {
+                const userId = sorted[i][0];
+                this.contextTokenActivity.delete(userId);
+                this.contextTokens.delete(userId);
+            }
+        }
+        // Fingerprint window: any entry older than the redelivery window is dead weight.
+        for (const [key, ts] of this.recentFingerprints) {
+            if (now - ts > WechatChannel.FINGERPRINT_WINDOW_MS)
+                this.recentFingerprints.delete(key);
+        }
     }
     /** Long-poll loop modeled on upstream monitorWeixinProvider. */
     async monitorLoop(credentials) {
@@ -277,8 +330,10 @@ export class WechatChannel {
                     const from = message.from_user_id ?? '';
                     if (from === '')
                         continue;
-                    if (message.context_token !== undefined)
+                    if (message.context_token !== undefined) {
                         this.contextTokens.set(from, message.context_token);
+                        this.contextTokenActivity.set(from, Date.now());
+                    }
                     const text = textFromItems(message.item_list);
                     if (text.length === 0)
                         continue;

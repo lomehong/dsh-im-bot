@@ -66,6 +66,33 @@ im-channel 插件（外部包，经 dsh plugin --profile <p> add 安装）
 - 飞书群聊仅响应被 @ 的消息（mention 占位符会从文本中剥离）
 - 绑定：当前为「能发消息即可绑定」（依赖飞书自建应用可用范围/微信单聊边界做准入）；后续可恢复一次性口令
 - 工具审批：暂未实现（agent 使用 harness 默认权限策略）；规划接飞书卡片按钮回调做危险工具确认
+  - 设计草案（见下文 § 工具审批）：hooks `ctx.on('session/event')` 监听 `tool/call`，命中危险名单时调 `ctx.approval.request({tool, reason, callId})`；通过 `approval/request` waterfall 监听器渲染飞书 / 微信卡，按钮回调用 `approval/decided` 决定 allow / deny
+  - 依赖：peer dep `@deepseek-ai/dsh-user-approval >=0.1.0`（已加入 package.json；部署需保证 harness 暴露 `ctx.approval` 服务）
+
+## 工具审批（规划）
+
+把 `im-channel` 注册成 harness 的 `approval/request` waterfall 上的一个 answerer：工具即将运行 → harness 通知瀑布 → 我们在 IM 里发卡片 → 用户点按钮 → 我们回 `approval/decided` → harness 继续或拒绝。
+
+```
+agent 发起 tool/call
+  → harness 工具栈调用 ctx.approval.request({tool, reason, callId})
+    → waterfall 派发 approval/request 事件（agent-scoped, scope-filtered）
+      → im-channel 的 answerer 命中：渲染飞书 / 微信卡片（Allow/Deny 按钮）
+        → 用户在 IM 里点击 → 卡片 callback URL → host 解析 → approval/decided(allow|deny)
+          → waterfall 解析 → harness 继续执行或拒绝
+  → 旁路：另一 answerer（ACP / Web）若已抢先决定，事件不再到达我们（sibling order 不保证）
+```
+
+接入点：
+- `plugin/driver.ts` 仍是工具事件收集点 — 当前只把 `tool/call` 文本写进 `inflight.toolLines`；未来把它升级成"等 approval 完成后再让 agent 继续"的屏障
+- 卡片渲染走飞书 `FeishuTurnSink` 已有 `stream → card → text` 降级；微信端 `WechatTurnSink` 只能批量追加，所以审批结果只能等用户回到 Web UI（规划）
+- 危险名单配置：`im-channel:` 节新增 `dangerousTools: string[]`（默认 `['bash', 'fs.write', 'fs.edit', 'git push']`）
+- 答案词汇：`allowed-once` / `rejected` / `cancelled` / `unavailable`；超时（默认 5 分钟）= `cancelled`
+
+不做的事（明确推迟）：
+- 「记住这次选择 / 全局规则」—— harness `user-approval` README 明确说只支持 `allowed-once`，没有 `allow-always` 概念
+- 多用户授权分流（一会话绑一用户已经够用）
+- 微信端审批 UI（协议不支持编辑已发消息，只能跑批量；审批先以飞书为准）
 
 ## 配置（cordis.yml 示例）
 

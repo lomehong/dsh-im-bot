@@ -22,8 +22,11 @@ export interface Binding {
 export declare class BindStore {
     private cache;
     private flushTimer;
+    /** Whether this process has wired a shutdown hook for pending flushes. */
+    private static shutdownRegistered;
     /** The process-wide store; the router and login API must share one cache. */
     static readonly shared: BindStore;
+    constructor();
     /** Loaded rows (lazily read from disk once per process). */
     private rows;
     private scheduleFlush;

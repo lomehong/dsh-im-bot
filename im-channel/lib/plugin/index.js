@@ -28,7 +28,7 @@ function isCredentialled(kind) {
 }
 /** Build one channel instance from its declared config. */
 function buildChannel(kind, ctx) {
-    const log = (line) => { process.stdout.write(`[im-channel] ${line}\n`); };
+    const log = (line) => { ctx.logger.info(line); };
     switch (kind) {
         case 'wechat': return new WechatChannel({ ctxLog: log });
         case 'feishu': return new FeishuChannel({ log });

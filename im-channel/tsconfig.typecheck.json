@@ -4,6 +4,10 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["src/core", "src/channels", "tests"],
-  "exclude": ["src/channels/feishu/login-bridge.ts", "src/channels/wechat/login-bridge.ts"]
+  "include": ["src", "tests"],
+  "exclude": [
+    "src/channels/feishu/login-bridge.ts",
+    "src/channels/wechat/login-bridge.ts",
+    "src/plugin/login-api.ts"
+  ]
 }
