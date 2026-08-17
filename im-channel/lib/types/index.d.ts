@@ -8,5 +8,7 @@ export { WechatChannel, loadWechatCredentials } from './channels/wechat/index.ts
 export type { WechatCredentials } from './channels/wechat/index.ts';
 export { FeishuChannel, loadFeishuCredentials, saveFeishuCredentials } from './channels/feishu/index.ts';
 export type { FeishuCredentials } from './channels/feishu/index.ts';
-export { WecomChannel, loadWecomCredentials, saveWecomCredentials } from './channels/wecom/index.ts';
-export type { WecomCredentials } from './channels/wecom/index.ts';
+export { WecomChannel, loadWecomCredentials, saveWecomCredentials, loadWecomMcpConfig, saveWecomMcpConfig } from './channels/wecom/index.ts';
+export type { WecomCredentials, WecomMcpConfig } from './channels/wecom/index.ts';
+export { loadMcpServers, getEnabledMcpServers, addMcpServer, updateMcpServer, removeMcpServer } from './channels/mcp-server-manager.ts';
+export type { McpServerEntry, McpServersConfig } from './channels/mcp-server-manager.ts';

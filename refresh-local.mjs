@@ -42,6 +42,11 @@ for (const target of targets) {
 console.log('[dsh-im-bot] 构建 im-channel…')
 run('npx', ['tsc', '-p', 'tsconfig.json'], join(repo, 'im-channel'))
 
+console.log('[dsh-im-bot] 构建 ui-settings-im…')
+run('npx', ['tsc', '-b', 'tsconfig.json'], join(repo, 'ui-settings-im'))
+run('npx', ['tsc', '-b', 'tsconfig.build.json'], join(repo, 'ui-settings-im'))
+run('node', ['scripts/build-client.mjs'], join(repo, 'ui-settings-im'))
+
 for (const target of targets) {
   const srcLib = join(target.src, 'lib')
   if (!existsSync(srcLib)) {

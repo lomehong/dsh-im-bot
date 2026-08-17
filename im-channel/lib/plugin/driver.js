@@ -16,12 +16,15 @@ export class HarnessDriver {
     agents;
     /** Agents created by this driver, keyed by session id. */
     owned = new Map();
+    /** MCP 工具注册表（企业微信） */
+    mcpRegistry;
     static nextInstanceId = 0;
     instanceId = ++HarnessDriver.nextInstanceId;
     constructor(ctx, options = {}) {
         this.ctx = ctx;
         this.options = options;
         this.agents = ctx.agents;
+        this.mcpRegistry = options.mcpRegistry;
         // One plugin-lifetime teardown for all owned agents. Registering per
         // session via ctx.effect inside async callbacks attached the disposers to
         // whatever fiber was running the callback (e.g. a router rebuild's
@@ -126,6 +129,10 @@ export class HarnessDriver {
             setup: async (agentCtx) => {
                 if (presets !== undefined)
                     await presets.mount(agentCtx, undefined);
+                // 注册 MCP 工具
+                if (this.mcpRegistry !== undefined) {
+                    await this.mcpRegistry.registerToAgent(agentCtx);
+                }
             },
         });
         this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });
@@ -168,6 +175,10 @@ export class HarnessDriver {
             setup: async (agentCtx) => {
                 if (presets !== undefined)
                     await presets.mount(agentCtx, undefined);
+                // 注册 MCP 工具
+                if (this.mcpRegistry !== undefined) {
+                    await this.mcpRegistry.registerToAgent(agentCtx);
+                }
             },
         });
         this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });

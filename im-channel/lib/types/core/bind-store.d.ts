@@ -12,6 +12,8 @@ export interface Binding {
     workspace?: string;
     /** Last chat target the user wrote from (Feishu chat_id, ...); enables proactive sends after restarts. */
     lastTargetId?: string;
+    /** 是否为主人（通过 /bind 绑定），false 或 undefined 表示访客（自动创建） */
+    isMaster?: boolean;
 }
 /**
  * Binding store with an in-memory cache and debounced persistence. All
@@ -34,9 +36,11 @@ export declare class BindStore {
     flushSync(): void;
     private findRow;
     /** Bind an IM user to a harness session. Rebinding replaces the old row. */
-    bind(ref: ImUserRef, sessionId: string): void;
+    bind(ref: ImUserRef, sessionId: string, isMaster?: boolean): void;
     /** Look up the bound session id for an IM user. */
     sessionIdFor(ref: ImUserRef): string | undefined;
+    /** 检查用户是否为主人（通过 /bind 绑定） */
+    isMasterFor(ref: ImUserRef): boolean;
     /** Remove a binding. Returns true when a row was removed. */
     unbind(ref: ImUserRef): boolean;
     /** Cycle the per-user reply verbosity 简洁 → 标准 → 详细 → 简洁. */

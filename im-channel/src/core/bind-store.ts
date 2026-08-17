@@ -16,6 +16,8 @@ export interface Binding {
   workspace?: string
   /** Last chat target the user wrote from (Feishu chat_id, ...); enables proactive sends after restarts. */
   lastTargetId?: string
+  /** 是否为主人（通过 /bind 绑定），false 或 undefined 表示访客（自动创建） */
+  isMaster?: boolean
 }
 
 /** Store shape persisted at ~/.dsh/im-channel/bindings.json. */
@@ -106,17 +108,19 @@ export class BindStore {
   }
 
   /** Bind an IM user to a harness session. Rebinding replaces the old row. */
-  bind(ref: ImUserRef, sessionId: string): void {
+  bind(ref: ImUserRef, sessionId: string, isMaster?: boolean): void {
     const existing = this.findRow(ref)
     if (existing !== undefined) {
       existing.sessionId = sessionId
       existing.boundAt = new Date().toISOString()
+      if (isMaster !== undefined) existing.isMaster = isMaster
     } else {
       this.rows().push({
         kind: ref.kind,
         userId: ref.userId,
         sessionId,
         boundAt: new Date().toISOString(),
+        ...(isMaster ? { isMaster: true } : {}),
       })
     }
     this.scheduleFlush()
@@ -125,6 +129,11 @@ export class BindStore {
   /** Look up the bound session id for an IM user. */
   sessionIdFor(ref: ImUserRef): string | undefined {
     return this.findRow(ref)?.sessionId
+  }
+
+  /** 检查用户是否为主人（通过 /bind 绑定） */
+  isMasterFor(ref: ImUserRef): boolean {
+    return this.findRow(ref)?.isMaster === true
   }
 
   /** Remove a binding. Returns true when a row was removed. */

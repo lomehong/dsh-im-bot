@@ -92,8 +92,9 @@ export interface RouterDeps {
 
 /** BindStore surface the router needs (subset of BindStore for testing). */
 export interface BindStoreLike {
-  bind(ref: InboundMessage['from'], sessionId: string): void
+  bind(ref: InboundMessage['from'], sessionId: string, isMaster?: boolean): void
   sessionIdFor(ref: InboundMessage['from']): string | undefined
+  isMasterFor?(ref: InboundMessage['from']): boolean
   unbind(ref: InboundMessage['from']): boolean
   /** Cycle the per-user reply verbosity (/回复); optional. */
   cycleVerbosity?(ref: InboundMessage['from']): string | undefined
@@ -193,19 +194,17 @@ export class Router {
       return
     }
     const sessionId = this.deps.store.sessionIdFor(message.from)
+    const isMaster = this.deps.store.isMasterFor?.(message.from) ?? false
     if (sessionId === undefined) {
-      await this.safeSend(channel, target, {
-        text: '🔗 还未绑定会话。先发送 /bind 绑定当前聊天，然后发送 /项目 选择工作区，即可开始对话。\n\n机器人命令：\n/bind — 绑定当前聊天\n/项目 — 选择项目工作区\n/帮助 — 查看全部命令',
-      })
+      // 没有绑定的用户：自动创建访客会话，无需 /bind
+      const guestSessionId = await this.startUserSession(message.from)
+      this.deps.store.bind(message.from, guestSessionId, false)
+      this.deps.store.rememberTarget?.(message.from, target.targetId)
+      this.log(`[im-channel] 访客 ${message.from.userId.slice(0, 12)}… 自动创建会话 ${guestSessionId.slice(0, 8)}…`)
+      await this.handleBoundMessage(channel, target, message, guestSessionId, false)
       return
     }
     this.deps.store.rememberTarget?.(message.from, target.targetId)
-    if (this.deps.store.workspaceFor?.(message.from) === undefined) {
-      await this.safeSend(channel, target, {
-        text: '📁 已绑定但还没选择项目。发送 /项目 查看并选择工作区后，再发消息开始对话。',
-      })
-      return
-    }
     // Bindings outlive the process; the driver's owned map does not. Lazily
     // re-attach before prompting so a host restart does not force a /bind.
     if (this.deps.driver.has !== undefined && !this.deps.driver.has(sessionId)) {
@@ -215,26 +214,32 @@ export class Router {
         this.log(`[im-channel] 会话 ${sessionId.slice(0, 8)}… 重连成功`)
       } catch (error) {
         this.log(`[im-channel] 会话 ${sessionId.slice(0, 8)}… 重连失败，将创建新会话: ${messageOf(error)}`)
-        // 恢复失败时创建新会话，并更新绑定，避免用户需要重新 /bind
         const newSessionId = await this.startUserSession(message.from)
-        this.deps.store.bind(message.from, newSessionId)
+        this.deps.store.bind(message.from, newSessionId, isMaster)
         this.deps.store.rememberTarget?.(message.from, target.targetId)
-        // 使用新 sessionId 继续
-        return await this.handleBoundMessage(channel, target, message, newSessionId)
+        return await this.handleBoundMessage(channel, target, message, newSessionId, isMaster)
       }
     }
-    await this.handleBoundMessage(channel, target, message, sessionId)
+    await this.handleBoundMessage(channel, target, message, sessionId, isMaster)
   }
 
   /** 处理已绑定的会话消息：发送到 agent 并回复 */
-  private async handleBoundMessage(channel: ImChannel, target: { kind: ImChannel['kind']; targetId: string }, message: InboundMessage, sessionId: string): Promise<void> {
+  private async handleBoundMessage(channel: ImChannel, target: { kind: ImChannel['kind']; targetId: string }, message: InboundMessage, sessionId: string, isMaster = false): Promise<void> {
     const verbosity = this.deps.store.verbosityFor?.(message.from)
     const sink = await this.openSink(channel, target, modeOf(verbosity))
     try {
       const promptOptions: PromptOptions = {}
       if (verbosity !== undefined) promptOptions.verbosity = verbosity
       promptOptions.onUpdate = view => sink.update(view)
-      const reply = await this.deps.driver.prompt(sessionId, message.text, promptOptions)
+      // 在消息前注入用户身份，让 agent 知道在和谁对话
+      const label = isMaster ? '主人' : '访客'
+      const userInfo = message.userInfo
+      const displayName = userInfo?.name ?? userInfo?.userId ?? message.from.userId
+      const position = userInfo?.position ?? ''
+      const department = userInfo?.department?.join('、') ?? ''
+      const identitySeg = [label, displayName, position, department].filter(Boolean).join('·')
+      const enrichedText = `[${identitySeg}] ${message.text}`
+      const reply = await this.deps.driver.prompt(sessionId, enrichedText, promptOptions)
       await sink.finish({ text: reply, markdown: true })
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error)
@@ -248,9 +253,9 @@ export class Router {
     const command = COMMAND_ALIASES[rawCommand] ?? rawCommand
     switch (command) {
       case 'bind': {
-        // Bind this chat to a harness session directly (no passphrase).
+        // Bind this chat to a harness session as master.
         const sessionId = await this.startUserSession(message.from)
-        this.deps.store.bind(message.from, sessionId)
+        this.deps.store.bind(message.from, sessionId, true)
         this.deps.store.rememberTarget?.(message.from, target.targetId)
         const workspace = this.deps.store.workspaceFor?.(message.from)
         const lead = workspace === undefined

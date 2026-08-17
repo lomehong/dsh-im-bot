@@ -17,6 +17,12 @@ export declare class LoginApi {
     register(): void;
     private handleBindingRemove;
     private handleWecomConfigure;
+    private handleWecomMcpConfigure;
+    private handleWecomMcpConfig;
+    private handleMcpServersList;
+    private handleMcpServerAdd;
+    private handleMcpServerUpdate;
+    private handleMcpServerRemove;
     /**
      * Auto-create a channel instance in settings once a platform login is
      * confirmed so the router (re)starts without manual configuration. One

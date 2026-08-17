@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { WSClient, DefaultLogger } from '@wecom/aibot-node-sdk'
 import type { WsFrame, WSClientEventMap, BaseMessage, EventMessage, TextMessage } from '@wecom/aibot-node-sdk'
-import type { ImChannel, ImUserId, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../../core/channel.ts'
+import type { ImChannel, ImUserId, InboundMessage, InboundUserInfo, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../../core/channel.ts'
 
 /** 通道凭证持久化路径：~/.dsh/im-channel/credentials/wecom.json */
 export interface WecomCredentials {
@@ -36,6 +36,27 @@ export function saveWecomCredentials(credentials: WecomCredentials): void {
   const path = credentialsPath()
   mkdirSync(join(path, '..'), { recursive: true })
   writeFileSync(path, `${JSON.stringify(credentials, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+}
+
+/** MCP 配置持久化路径：~/.dsh/im-channel/credentials/wecom-mcp.json */
+export interface WecomMcpConfig {
+  mcpServers: Record<string, { type: string; url: string }>
+}
+
+function mcpConfigPath(): string {
+  return join(homedir(), '.dsh', 'im-channel', 'credentials', 'wecom-mcp.json')
+}
+
+export function loadWecomMcpConfig(): WecomMcpConfig | undefined {
+  const path = mcpConfigPath()
+  if (!existsSync(path)) return undefined
+  return JSON.parse(readFileSync(path, 'utf8')) as WecomMcpConfig
+}
+
+export function saveWecomMcpConfig(config: WecomMcpConfig): void {
+  const path = mcpConfigPath()
+  mkdirSync(join(path, '..'), { recursive: true })
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
 }
 
 export interface WecomChannelOptions {
@@ -136,12 +157,12 @@ export class WecomChannel implements ImChannel {
 
     // 注册消息事件
     this.client.on('message.text', (data: WsFrame<TextMessage>) => {
-      this.handleIncoming(data)
+      void this.handleIncoming(data)
     })
     // 注册所有消息类型（非文本也只记录帧，用于后续可能的媒体处理）
     // 语音消息在此处理（SDK 自动转文字）
     this.client.on('message.voice', (data: WsFrame<any>) => {
-      this.handleIncoming(data)
+      void this.handleIncoming(data)
     })
 
     // 注册事件：enter_chat 仅用于记录
@@ -181,7 +202,7 @@ export class WecomChannel implements ImChannel {
   /**
    * 处理收到的消息帧
    */
-  private handleIncoming(data: WsFrame<BaseMessage>): void {
+  private async handleIncoming(data: WsFrame<BaseMessage>): Promise<void> {
     const body = data.body
     if (!body?.msgid) return
 
@@ -210,12 +231,26 @@ export class WecomChannel implements ImChannel {
 
     this.log(`wecom inbound: user=${userId} type=${body.msgtype} chattype=${body.chattype} text=${text.slice(0, 40)}`)
 
+    // 从消息体中提取用户信息
+    // SDK 的 BaseMessage 类型只有 from.userid，但实际消息体可能包含更多字段
+    // 使用 any 访问未在类型中定义的字段
+    const rawBody = body as any
+    const userInfo: InboundUserInfo | undefined = rawBody.from?.name || rawBody.sender?.name
+      ? {
+          userId,
+          name: rawBody.from?.name ?? rawBody.sender?.name,
+          position: rawBody.from?.position ?? rawBody.sender?.position,
+          department: rawBody.from?.department ?? rawBody.sender?.department,
+        }
+      : undefined
+
     this.handler?.({
       from: { kind: 'wecom', userId: userId as ImUserId },
       text,
       messageId: body.msgid,
       ...(chatId ? { chatId } : {}),
       ...(isGroup ? { mentioned: true } : {}),
+      ...(userInfo ? { userInfo } : {}),
     })
   }
 

@@ -36,7 +36,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -b tsconfig.json"
+    "build": "tsc -b tsconfig.json && node scripts/build-client.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-client-runtime": ">=0.1.0",

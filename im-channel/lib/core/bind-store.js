@@ -79,11 +79,13 @@ export class BindStore {
         return this.rows().find(row => row.kind === ref.kind && row.userId === ref.userId);
     }
     /** Bind an IM user to a harness session. Rebinding replaces the old row. */
-    bind(ref, sessionId) {
+    bind(ref, sessionId, isMaster) {
         const existing = this.findRow(ref);
         if (existing !== undefined) {
             existing.sessionId = sessionId;
             existing.boundAt = new Date().toISOString();
+            if (isMaster !== undefined)
+                existing.isMaster = isMaster;
         }
         else {
             this.rows().push({
@@ -91,6 +93,7 @@ export class BindStore {
                 userId: ref.userId,
                 sessionId,
                 boundAt: new Date().toISOString(),
+                ...(isMaster ? { isMaster: true } : {}),
             });
         }
         this.scheduleFlush();
@@ -98,6 +101,10 @@ export class BindStore {
     /** Look up the bound session id for an IM user. */
     sessionIdFor(ref) {
         return this.findRow(ref)?.sessionId;
+    }
+    /** 检查用户是否为主人（通过 /bind 绑定） */
+    isMasterFor(ref) {
+        return this.findRow(ref)?.isMaster === true;
     }
     /** Remove a binding. Returns true when a row was removed. */
     unbind(ref) {

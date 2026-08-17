@@ -15,6 +15,15 @@ export interface WecomCredentials {
 }
 export declare function loadWecomCredentials(): WecomCredentials | undefined;
 export declare function saveWecomCredentials(credentials: WecomCredentials): void;
+/** MCP 配置持久化路径：~/.dsh/im-channel/credentials/wecom-mcp.json */
+export interface WecomMcpConfig {
+    mcpServers: Record<string, {
+        type: string;
+        url: string;
+    }>;
+}
+export declare function loadWecomMcpConfig(): WecomMcpConfig | undefined;
+export declare function saveWecomMcpConfig(config: WecomMcpConfig): void;
 export interface WecomChannelOptions {
     /** 诊断日志接收器 */
     log?: (line: string) => void;

@@ -40,6 +40,18 @@ window.__ModuleLoader__.load({
 				src: FEISHU_PNG
 			});
 		}
+		function WecomMark({ size = 26 }) {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("svg", {
+				width: size,
+				height: size,
+				viewBox: "0 0 24 24",
+				"aria-hidden": "true",
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", {
+					fill: "#2A9D8F",
+					d: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"
+				})]
+			});
+		}
 		//#endregion
 		//#region node_modules/.pnpm/qrcode-generator@2.0.4/node_modules/qrcode-generator/dist/qrcode.mjs
 		/**
@@ -2636,6 +2648,47 @@ window.__ModuleLoader__.load({
 			"bindingSession": "eiGEEq_bindingSession"
 		};
 		//#endregion
+		//#region src/client/WecomConfigPanel.tsx
+		function WecomConfigPanel({ onConfigured, onError: onErrorProp }) {
+			const submitBotConfig = async (e) => {
+				e.preventDefault();
+				const form = e.currentTarget;
+				const botId = form.botId.value.trim();
+				const secret = form.secret.value.trim();
+				if (!botId || !secret) return;
+				try {
+					const resp = await fetch("/im-channel/wecom/configure", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ botId, secret })
+					});
+					const data = await resp.json();
+					if (data.ok) {
+						onConfigured();
+					} else {
+						onErrorProp(data.error ?? "配置失败");
+					}
+				} catch (err) {
+					onErrorProp(err instanceof Error ? err.message : String(err));
+				}
+			};
+			const formFieldStyle = { width: "100%", padding: "8px", marginBottom: "16px", border: "1px solid #ccc", borderRadius: "4px", boxSizing: "border-box" };
+			const submitButtonStyle = { padding: "8px 24px", backgroundColor: "#2A9D8F", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer" };
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				style: { padding: "16px", width: "100%" },
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("form", {
+					onSubmit: (e) => { submitBotConfig(e); },
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("label", { style: { display: "block", marginBottom: "8px", fontWeight: "600" }, children: "BotID" }),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", { type: "text", name: "botId", placeholder: "AIBOTID_xxxxxxxx", style: formFieldStyle }),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("label", { style: { display: "block", marginBottom: "8px", fontWeight: "600" }, children: "Secret" }),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", { type: "password", name: "secret", placeholder: "输入 Secret", style: formFieldStyle }),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", { type: "submit", style: submitButtonStyle, children: "保存配置" })
+					]
+				})
+			});
+		}
+		//#endregion
 		//#region src/client/BotChannelTab.tsx
 		/**
 		* Mobile Connect tab content: platform cards in one row, each with its brand
@@ -2646,11 +2699,13 @@ window.__ModuleLoader__.load({
 		const POLL_INTERVAL_MS = 1500;
 		const KIND_LABELS = {
 			wechat: "微信",
-			feishu: "飞书"
+			feishu: "飞书",
+			wecom: "企业微信"
 		};
 		const CARD_MARKS = {
 			wechat: WechatMark,
-			feishu: FeishuMark
+			feishu: FeishuMark,
+			wecom: WecomMark
 		};
 		function BotChannelTab(props) {
 			const t = props.t;
@@ -2755,6 +2810,9 @@ window.__ModuleLoader__.load({
 			}, {
 				kind: "feishu",
 				label: t("card.feishu")
+			}, {
+				kind: "wecom",
+				label: t("card.wecom")
 			}];
 			const stepKeys = selected === void 0 ? [] : [
 				"1",
@@ -2803,7 +2861,17 @@ window.__ModuleLoader__.load({
 					}),
 					selected !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: BotChannelTab_module_css_default.detail,
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						children: [selected === "wecom" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							className: BotChannelTab_module_css_default.qrPanel,
+							style: { width: "100%", maxWidth: "none" },
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(WecomConfigPanel, {
+								onConfigured: () => {
+									setLogin({ kind: "wecom", status: "confirmed", qrUrl: void 0, error: void 0 });
+									refreshBindings();
+								},
+								onError: (msg) => setStartError(msg)
+							})
+						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							className: BotChannelTab_module_css_default.qrPanel,
 							"data-state": login?.status ?? (startError !== void 0 ? "error" : "pending"),
 							children: [
@@ -2937,7 +3005,122 @@ window.__ModuleLoader__.load({
 								] }, `${row.kind}:${row.sessionId}:${index}`)) })]
 							})
 						]
-					})
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(McpServersPanel, {})
+				]
+			});
+		}
+		//#endregion
+		//#region src/client/McpServersPanel.tsx
+		function McpServersPanel() {
+			const [servers, setServers] = (0, react.useState)([]);
+			const [newName, setNewName] = (0, react.useState)("");
+			const [newType, setNewType] = (0, react.useState)("streamable-http");
+			const [newUrl, setNewUrl] = (0, react.useState)("");
+			const [status, setStatus] = (0, react.useState)(void 0);
+			const loadServers = () => {
+				fetch("/im-channel/mcp-servers").then(r => r.json()).then(data => {
+					if (data.ok) setServers(data.servers);
+				}).catch(() => {});
+			};
+			(0, react.useEffect)(loadServers, []);
+			const addServer = async () => {
+				if (!newName.trim() || !newUrl.trim()) return;
+				try {
+					const resp = await fetch("/im-channel/mcp-servers/add", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ name: newName.trim(), type: newType.trim(), url: newUrl.trim() })
+					});
+					const data = await resp.json();
+					if (data.ok) {
+						setNewName("");
+						setNewUrl("");
+						setStatus("added");
+						loadServers();
+					} else {
+						setStatus("error: " + (data.error ?? "添加失败"));
+					}
+				} catch (err) {
+					setStatus("error: " + (err instanceof Error ? err.message : String(err)));
+				}
+			};
+			const removeServer = async (id) => {
+				try {
+					const resp = await fetch("/im-channel/mcp-servers/remove", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ id })
+					});
+					const data = await resp.json();
+					if (data.ok) {
+						setStatus("removed");
+						loadServers();
+					}
+				} catch (err) {
+					setStatus("error: " + (err instanceof Error ? err.message : String(err)));
+				}
+			};
+			const toggleServer = async (server) => {
+				try {
+					const resp = await fetch("/im-channel/mcp-servers/update", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ id: server.id, enabled: !server.enabled })
+					});
+					const data = await resp.json();
+					if (data.ok) loadServers();
+				} catch (err) {
+					setStatus("error: " + (err instanceof Error ? err.message : String(err)));
+				}
+			};
+			const formFieldStyle = { width: "100%", padding: "8px", marginBottom: "12px", border: "1px solid #ccc", borderRadius: "4px", boxSizing: "border-box" };
+			const btnStyle = { padding: "6px 16px", backgroundColor: "#2A9D8F", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "13px" };
+			const smallBtn = { ...btnStyle, padding: "4px 10px", fontSize: "12px" };
+			const dangerBtn = { ...smallBtn, backgroundColor: "#E76F51" };
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: { marginTop: "24px", padding: "16px", borderTop: "1px solid #ddd" },
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" }, children: "MCP 服务器管理" }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { style: { fontSize: "12px", color: "#888", marginBottom: "12px" }, children: "配置 MCP 服务器，为 AI 助手提供日程、待办、会议等外部工具能力。" }),
+					servers.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: { marginBottom: "16px" },
+						children: servers.map(s => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: { display: "flex", alignItems: "center", gap: "8px", padding: "8px", borderBottom: "1px solid #eee", fontSize: "13px" },
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									style: { cursor: "pointer", fontSize: "16px", userSelect: "none" },
+									onClick: () => toggleServer(s),
+									children: s.enabled ? "✅" : "⭕"
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: { flex: "0 0 120px", fontWeight: "500" }, children: s.name }),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: { flex: "0 0 140px", color: "#888", fontSize: "12px" }, children: s.type }),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: { flex: 1, color: "#666", fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: s.url }),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", { style: dangerBtn, onClick: () => removeServer(s.id), children: "删除" })
+							]
+						}, s.id))
+					}),
+					servers.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { style: { color: "#999", fontSize: "13px", marginBottom: "12px" }, children: "暂无 MCP 服务器配置" }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: { display: "flex", gap: "8px", alignItems: "flex-end", flexWrap: "wrap" },
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { style: { flex: "1 1 150px" }, children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", { placeholder: "名称", value: newName, onChange: e => setNewName(e.target.value), style: formFieldStyle }) }),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { style: { flex: "0 0 150px" }, children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("select", {
+								value: newType,
+								onChange: e => setNewType(e.target.value),
+								style: formFieldStyle,
+								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", { value: "streamable-http", children: "streamable-http" }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", { value: "stdio", children: "stdio" })
+								]
+							}) }),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { style: { flex: "2 1 250px" }, children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", { placeholder: "URL（MCP 服务器地址）", value: newUrl, onChange: e => setNewUrl(e.target.value), style: formFieldStyle }) }),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", { style: { ...btnStyle, marginBottom: "12px" }, onClick: addServer, children: "添加服务器" })
+						]
+					}),
+					status === "added" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { style: { color: "#2A9D8F", fontSize: "12px", marginTop: "8px" }, children: "✅ MCP 服务器已添加" }),
+					status === "removed" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { style: { color: "#2A9D8F", fontSize: "12px", marginTop: "8px" }, children: "已删除" }),
+					typeof status === "string" && status.startsWith("error:") && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { role: "alert", style: { color: "#E76F51", fontSize: "12px", marginTop: "8px" }, children: status.slice(6) })
 				]
 			});
 		}
@@ -2950,6 +3133,7 @@ window.__ModuleLoader__.load({
 			cards: "平台",
 			"card.wechat": "微信",
 			"card.feishu": "飞书",
+			"card.wecom": "企业微信",
 			"qr.waiting": "正在获取二维码…",
 			"qr.alt": "登录二维码",
 			"qr.refresh": "刷新二维码",
@@ -2973,7 +3157,13 @@ window.__ModuleLoader__.load({
 			"step.feishu.1": "用手机飞书「扫一扫」扫描左侧二维码。",
 			"step.feishu.2": "在飞书授权页选择「创建新应用」或绑定已有应用。",
 			"step.feishu.3": "确认授权——应用会自动配好机器人能力与事件订阅。",
-			"step.feishu.4": "页面提示「登录成功」后，即可在飞书里与机器人对话。"
+			"step.feishu.4": "页面提示「登录成功」后，即可在飞书里与机器人对话。",
+			"steps.title.wecom": "企业微信接入步骤",
+			"step.wecom.1": "在企业微信管理后台创建「智能机器人」。",
+			"step.wecom.2": "复制 BotID 和 Secret 到左侧表单中，点击「保存配置」。",
+			"step.wecom.3": "（可选）粘贴 MCP 配置 JSON，启用日程、待办、会议等能力。",
+			"step.wecom.4": "保存后即可在企业微信中与机器人对话，发送 /bind 绑定你的会话。",
+			"note.wecom": "BotID 和 Secret 保存在本地，不会发送到任何第三方服务器。"
 		};
 		/** en copy for the Bot Channel tab. */
 		const en = {
@@ -2982,6 +3172,7 @@ window.__ModuleLoader__.load({
 			cards: "Platform",
 			"card.wechat": "WeChat",
 			"card.feishu": "Feishu",
+			"card.wecom": "WeCom",
 			"qr.waiting": "Fetching QR code…",
 			"qr.alt": "Login QR code",
 			"qr.refresh": "Refresh QR code",
@@ -3010,7 +3201,7 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region src/client/store.ts
 		/** The supported bot platform kinds. */
-		const KINDS = ["feishu", "wechat"];
+		const KINDS = ["feishu", "wechat", "wecom"];
 		//#endregion
 		//#region src/client/index.ts
 		const NS = "settings.im";

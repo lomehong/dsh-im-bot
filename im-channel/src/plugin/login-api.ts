@@ -75,6 +75,36 @@ export class LoginApi {
       path: '/im-channel/wecom/configure',
       handler: (req: IncomingMessage, res: ServerResponse) => void this.handleWecomConfigure(req, res),
     })
+    web.register({
+      kind: 'exact',
+      path: '/im-channel/wecom/mcp-configure',
+      handler: (req: IncomingMessage, res: ServerResponse) => void this.handleWecomMcpConfigure(req, res),
+    })
+    web.register({
+      kind: 'exact',
+      path: '/im-channel/wecom/mcp-config',
+      handler: (_req: IncomingMessage, res: ServerResponse) => void this.handleWecomMcpConfig(res),
+    })
+    web.register({
+      kind: 'exact',
+      path: '/im-channel/mcp-servers',
+      handler: (_req: IncomingMessage, res: ServerResponse) => void this.handleMcpServersList(res),
+    })
+    web.register({
+      kind: 'exact',
+      path: '/im-channel/mcp-servers/add',
+      handler: (req: IncomingMessage, res: ServerResponse) => void this.handleMcpServerAdd(req, res),
+    })
+    web.register({
+      kind: 'exact',
+      path: '/im-channel/mcp-servers/update',
+      handler: (req: IncomingMessage, res: ServerResponse) => void this.handleMcpServerUpdate(req, res),
+    })
+    web.register({
+      kind: 'exact',
+      path: '/im-channel/mcp-servers/remove',
+      handler: (req: IncomingMessage, res: ServerResponse) => void this.handleMcpServerRemove(req, res),
+    })
   }
 
   private async handleBindingRemove(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -108,6 +138,96 @@ export class LoginApi {
         this.session.status = 'confirmed'
       }
       respondJson(res, 200, { ok: true })
+    } catch (error) {
+      respondJson(res, 500, { ok: false, error: messageOf(error) })
+    }
+  }
+
+  private async handleWecomMcpConfigure(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const body = await readJsonBody(req) as { mcpServers?: Record<string, { type: string; url: string }> }
+      if (!body.mcpServers) {
+        respondJson(res, 400, { ok: false, error: '需要 MCP 服务器配置' })
+        return
+      }
+      const { saveWecomMcpConfigEx } = await import('../channels/wecom/login-bridge.ts')
+      await saveWecomMcpConfigEx(body.mcpServers)
+      respondJson(res, 200, { ok: true })
+    } catch (error) {
+      respondJson(res, 500, { ok: false, error: messageOf(error) })
+    }
+  }
+
+  private async handleWecomMcpConfig(res: ServerResponse): Promise<void> {
+    try {
+      const { loadWecomMcpConfig } = await import('../channels/wecom/index.ts')
+      const config = loadWecomMcpConfig()
+      respondJson(res, 200, { ok: true, config: config ?? null })
+    } catch (error) {
+      respondJson(res, 500, { ok: false, error: messageOf(error) })
+    }
+  }
+
+  private async handleMcpServersList(res: ServerResponse): Promise<void> {
+    try {
+      const { loadMcpServers } = await import('../channels/mcp-server-manager.ts')
+      const servers = loadMcpServers()
+      respondJson(res, 200, { ok: true, servers })
+    } catch (error) {
+      respondJson(res, 500, { ok: false, error: messageOf(error) })
+    }
+  }
+
+  private async handleMcpServerAdd(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const body = await readJsonBody(req) as { name?: string; type?: string; url?: string }
+      if (typeof body.name !== 'string' || typeof body.url !== 'string') {
+        respondJson(res, 400, { ok: false, error: '需要 name 和 url' })
+        return
+      }
+      const { addMcpServer } = await import('../channels/mcp-server-manager.ts')
+      const entry = addMcpServer({
+        name: body.name,
+        type: body.type ?? 'streamable-http',
+        url: body.url,
+        enabled: true,
+      })
+      respondJson(res, 200, { ok: true, server: entry })
+    } catch (error) {
+      respondJson(res, 500, { ok: false, error: messageOf(error) })
+    }
+  }
+
+  private async handleMcpServerUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const body = await readJsonBody(req) as { id?: string; name?: string; type?: string; url?: string; enabled?: boolean }
+      if (typeof body.id !== 'string') {
+        respondJson(res, 400, { ok: false, error: '需要 id' })
+        return
+      }
+      const { updateMcpServer } = await import('../channels/mcp-server-manager.ts')
+      const updated = updateMcpServer(body.id, {
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.type !== undefined ? { type: body.type } : {}),
+        ...(body.url !== undefined ? { url: body.url } : {}),
+        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+      })
+      respondJson(res, 200, { ok: updated })
+    } catch (error) {
+      respondJson(res, 500, { ok: false, error: messageOf(error) })
+    }
+  }
+
+  private async handleMcpServerRemove(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const body = await readJsonBody(req) as { id?: string }
+      if (typeof body.id !== 'string') {
+        respondJson(res, 400, { ok: false, error: '需要 id' })
+        return
+      }
+      const { removeMcpServer } = await import('../channels/mcp-server-manager.ts')
+      const removed = removeMcpServer(body.id)
+      respondJson(res, 200, { ok: removed })
     } catch (error) {
       respondJson(res, 500, { ok: false, error: messageOf(error) })
     }

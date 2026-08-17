@@ -14,6 +14,25 @@ export interface ImUserRef {
     readonly userId: ImUserId;
 }
 /**
+ * IM 用户详细信息（由各渠道自行填充，可选字段因平台而异）
+ */
+export interface InboundUserInfo {
+    /** 用户账号/ID */
+    userId: string;
+    /** 用户姓名 */
+    name?: string;
+    /** 职务 */
+    position?: string;
+    /** 部门列表 */
+    department?: string[];
+    /** 手机号 */
+    mobile?: string;
+    /** 邮箱 */
+    email?: string;
+    /** 头像 URL */
+    avatar?: string;
+}
+/**
  * One normalized inbound message from any IM platform. Channels parse
  * platform-specific payloads into this shape before routing.
  */
@@ -26,6 +45,8 @@ export interface InboundMessage {
     readonly chatId?: string;
     /** True when the message mentioned/at-ed the bot in a group chat. */
     readonly mentioned?: boolean;
+    /** 发送者详细信息（渠道可选填充） */
+    readonly userInfo?: InboundUserInfo;
 }
 /** Outbound reply payload; channels render to platform formats. */
 export interface OutboundMessage {

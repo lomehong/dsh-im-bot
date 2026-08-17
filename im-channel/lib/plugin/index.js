@@ -6,6 +6,8 @@ import { HarnessDriver } from "./driver.js";
 import { WechatChannel, loadWechatCredentials } from "../channels/wechat/index.js";
 import { FeishuChannel, loadFeishuCredentials } from "../channels/feishu/index.js";
 import { WecomChannel, loadWecomCredentials } from "../channels/wecom/index.js";
+import { WecomMcpRegistry } from "../channels/wecom/wecom-mcp-registry.js";
+import { getEnabledMcpServers } from "../channels/mcp-server-manager.js";
 import { LoginApi } from "./login-api.js";
 export const name = 'im-channel';
 export const inject = ['agents'];
@@ -48,7 +50,13 @@ export function apply(ctx, config) {
     // One driver for the whole plugin lifetime: router rebuilds (settings
     // edits, instance reconciliation) must not orphan bound sessions — the
     // driver's owned-session map is what /bind hands out.
-    const driver = new HarnessDriver(ctx, {});
+    const mcpRegistry = new WecomMcpRegistry();
+    // 从通用 MCP 服务器管理中读取所有已启用的 MCP 服务器
+    const enabledServers = getEnabledMcpServers();
+    for (const server of enabledServers) {
+        mcpRegistry.registerServer({ name: server.name, url: server.url });
+    }
+    const driver = new HarnessDriver(ctx, { mcpRegistry });
     // One bind store for the whole plugin lifetime (and process-shared with
     // the login HTTP API): the bound-session rows must survive router
     // rebuilds, and /bind hands out new sessions from it.

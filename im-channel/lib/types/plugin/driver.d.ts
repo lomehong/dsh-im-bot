@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { AgentOptions } from '@deepseek-ai/dsh-agent';
 import type { AgentDriver, PromptOptions } from '../core/router.ts';
+import type { WecomMcpRegistry } from '../channels/wecom/wecom-mcp-registry.ts';
 /**
  * AgentDriver over the in-process harness services: one agent per bound IM
  * user, prompt via followup + whenIdle, replies assembled from
@@ -13,11 +14,14 @@ export declare class HarnessDriver implements AgentDriver {
     private readonly agents;
     /** Agents created by this driver, keyed by session id. */
     private readonly owned;
+    /** MCP 工具注册表（企业微信） */
+    private readonly mcpRegistry;
     private static nextInstanceId;
     private readonly instanceId;
     constructor(ctx: Context, options?: {
         cwd?: string;
         agentOptions?: AgentOptions;
+        mcpRegistry?: WecomMcpRegistry;
     });
     startSession(options?: {
         cwd?: string;

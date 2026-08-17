@@ -5,6 +5,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { AgentDriver, PromptOptions } from '../core/router.ts'
 import { interruptedNote, modeOf, renderFinal, renderLive, type VerbosityMode } from '../core/render.ts'
+import type { WecomMcpRegistry } from '../channels/wecom/wecom-mcp-registry.ts'
 
 /** Live-update cadence derived from the /回复 verbosity. */
 type TurnMode = VerbosityMode
@@ -49,12 +50,18 @@ export class HarnessDriver implements AgentDriver {
   private readonly agents: AgentRegistry
   /** Agents created by this driver, keyed by session id. */
   private readonly owned = new Map<string, { agent: Agent; inflight: InflightTurn | undefined }>()
+  /** MCP 工具注册表（企业微信） */
+  private readonly mcpRegistry: WecomMcpRegistry | undefined
 
   private static nextInstanceId = 0
   private readonly instanceId = ++HarnessDriver.nextInstanceId
 
-  constructor(private readonly ctx: Context, private readonly options: { cwd?: string; agentOptions?: AgentOptions } = {}) {
+  constructor(
+    private readonly ctx: Context,
+    private readonly options: { cwd?: string; agentOptions?: AgentOptions; mcpRegistry?: WecomMcpRegistry } = {},
+  ) {
     this.agents = ctx.agents
+    this.mcpRegistry = options.mcpRegistry
     // One plugin-lifetime teardown for all owned agents. Registering per
     // session via ctx.effect inside async callbacks attached the disposers to
     // whatever fiber was running the callback (e.g. a router rebuild's
@@ -152,6 +159,10 @@ export class HarnessDriver implements AgentDriver {
       ...agentOptions === undefined ? {} : { agentOptions },
       setup: async agentCtx => {
         if (presets !== undefined) await presets.mount(agentCtx, undefined)
+        // 注册 MCP 工具
+        if (this.mcpRegistry !== undefined) {
+          await this.mcpRegistry.registerToAgent(agentCtx)
+        }
       },
     })
     this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined })
@@ -193,6 +204,10 @@ export class HarnessDriver implements AgentDriver {
       ...createOptions.agentOptions === undefined ? {} : { agentOptions: createOptions.agentOptions },
       setup: async agentCtx => {
         if (presets !== undefined) await presets.mount(agentCtx, undefined)
+        // 注册 MCP 工具
+        if (this.mcpRegistry !== undefined) {
+          await this.mcpRegistry.registerToAgent(agentCtx)
+        }
       },
     })
     this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined })

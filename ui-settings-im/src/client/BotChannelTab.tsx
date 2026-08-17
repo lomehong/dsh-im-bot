@@ -16,6 +16,8 @@ import css from './BotChannelTab.module.css'
 import { QrPanel, type LoginStatus } from './QrPanel.tsx'
 import { StepsPanel } from './StepsPanel.tsx'
 import { PassphraseCard } from './PassphraseCard.tsx'
+import { WecomConfigPanel } from './WecomConfigPanel.tsx'
+import { McpServersPanel } from './McpServersPanel.tsx'
 import { BindingsTable, type BindingRow } from './BindingsTable.tsx'
 
 export type { LoginStatus, BindingRow }
@@ -212,7 +214,15 @@ export function BotChannelTab(props: BotChannelTabProps) {
 
       {selected !== undefined && (
         <div className={css.detail}>
-          <QrPanel login={login} startError={startError} t={t} onRefresh={refreshQr} />
+          {selected === 'wecom' ? (
+            <WecomConfigPanel
+              t={t}
+              onConfigured={() => setLogin({ kind: 'wecom', status: 'confirmed', qrUrl: undefined, error: undefined })}
+              onError={(msg) => setStartError(msg)}
+            />
+          ) : (
+            <QrPanel login={login} startError={startError} t={t} onRefresh={refreshQr} />
+          )}
           <StepsPanel kind={selected} t={t} />
         </div>
       )}
@@ -224,6 +234,7 @@ export function BotChannelTab(props: BotChannelTabProps) {
         onRemove={row => { void removeBinding(row) }}
       />
       {!active && <p className={css.bindingsEmpty}>{t('bindings.paused')}</p>}
+      <McpServersPanel />
     </div>
   )
 }

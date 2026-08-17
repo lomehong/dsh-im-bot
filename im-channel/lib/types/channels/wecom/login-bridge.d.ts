@@ -11,13 +11,18 @@
 import type { QrLoginBridge } from '../../plugin/login-api.ts';
 /**
  * 通过 BotID + Secret 配置企业微信机器人。
- * 保存凭据后，通道会自动连接。
  *
  * @param botId - 企业微信智能机器人 BotID（管理后台获取）
  * @param secret - 企业微信智能机器人 Secret（管理后台获取）
- * @returns 成功返回 true，失败抛出错误
  */
 export declare function configureWecomBot(botId: string, secret: string): Promise<void>;
+/**
+ * 保存 MCP 服务器配置
+ */
+export declare function saveWecomMcpConfigEx(mcpServers: Record<string, {
+    type: string;
+    url: string;
+}>): Promise<void>;
 /**
  * 检查是否已配置企业微信凭据
  */

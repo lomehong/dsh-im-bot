@@ -10,7 +10,7 @@
  */
 
 import type { QrLoginBridge } from '../../plugin/login-api.ts'
-import { loadWecomCredentials, saveWecomCredentials } from './index.ts'
+import { loadWecomCredentials, saveWecomCredentials, saveWecomMcpConfig } from './index.ts'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -28,11 +28,9 @@ async function validateCredentials(botId: string, secret: string): Promise<boole
 
 /**
  * 通过 BotID + Secret 配置企业微信机器人。
- * 保存凭据后，通道会自动连接。
  *
  * @param botId - 企业微信智能机器人 BotID（管理后台获取）
  * @param secret - 企业微信智能机器人 Secret（管理后台获取）
- * @returns 成功返回 true，失败抛出错误
  */
 export async function configureWecomBot(botId: string, secret: string): Promise<void> {
   const valid = await validateCredentials(botId, secret)
@@ -40,6 +38,13 @@ export async function configureWecomBot(botId: string, secret: string): Promise<
     throw new Error('BotID 和 Secret 不能为空。')
   }
   saveWecomCredentials({ botId, secret })
+}
+
+/**
+ * 保存 MCP 服务器配置
+ */
+export async function saveWecomMcpConfigEx(mcpServers: Record<string, { type: string; url: string }>): Promise<void> {
+  saveWecomMcpConfig({ mcpServers })
 }
 
 /**

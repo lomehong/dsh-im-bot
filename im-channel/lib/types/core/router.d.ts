@@ -92,8 +92,9 @@ export interface RouterDeps {
 }
 /** BindStore surface the router needs (subset of BindStore for testing). */
 export interface BindStoreLike {
-    bind(ref: InboundMessage['from'], sessionId: string): void;
+    bind(ref: InboundMessage['from'], sessionId: string, isMaster?: boolean): void;
     sessionIdFor(ref: InboundMessage['from']): string | undefined;
+    isMasterFor?(ref: InboundMessage['from']): boolean;
     unbind(ref: InboundMessage['from']): boolean;
     /** Cycle the per-user reply verbosity (/回复); optional. */
     cycleVerbosity?(ref: InboundMessage['from']): string | undefined;
