@@ -15,6 +15,7 @@ export interface BindingRow {
 const KIND_LABELS: Record<Kind, string> = {
   wechat: '微信',
   feishu: '飞书',
+  wecom: '企业微信',
 }
 
 export interface BindingsTableProps {

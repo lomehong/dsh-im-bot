@@ -10,10 +10,10 @@
  *   node scripts/build-client.mjs
  */
 import { createRequire } from 'node:module'
-import { homedir } from 'node:os'
 const require = createRequire(import.meta.url)
-const esbuildPath = require('path').join(homedir(), 'AppData/Local/Temp/opencode/node_modules/esbuild')
-const { build } = require(esbuildPath)
+// Resolve esbuild through normal Node resolution (this package's own
+// node_modules first); no machine-specific absolute paths.
+const { build } = require('esbuild')
 import { readFileSync } from 'node:fs'
 import { resolve, dirname, basename, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -109,9 +109,8 @@ const result = await build({
   platform: 'browser',
   target: 'es2022',
   jsx: 'automatic',
-  external: EXTERNALS,
-  nodePaths: [require('path').join(homedir(), 'AppData/Local/Temp/opencode/node_modules')],
-  banner: { js: banner },
+	external: EXTERNALS,
+	banner: { js: banner },
   footer: { js: footer },
   outfile: resolve(root, 'lib/client.js'),
   sourcemap: true,
