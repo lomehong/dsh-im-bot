@@ -1,20 +1,24 @@
 # im-channel 设计方案
 
-国内 IM 前端通道：飞书、微信、QQ、钉钉。用户在手机上与自己的 DeepSeek Harness agent 对话。
+IM 前端通道：飞书、微信、企业微信（QQ / 钉钉为远期规划）。
+产品形态是「个人的数字分身」：渠道内 Owner 一次认领，其余用户作为访客直接使用。
 
 ## 总体架构
 
 ```
-im-channel 插件（外部包，经 dsh plugin --profile <p> add 安装）
+im-channel 插件（外部包，经 install.mjs 或 pnpm add git 安装）
 ├── core/            平台无关
-│   ├── channel.ts   ImChannel 接口：connect / onMessage / send / stop
-│   ├── bind-store   口令绑定存储（~/.dsh/im-channel/bindings.json）
-│   └── router.ts    消息路由：命令 → 绑定检查 → driver.prompt → 回复
+│   ├── channel.ts   ImChannel 接口：connect / onMessage / send / openTurn(TurnSink) / stop
+│   ├── bind-store   Owner/访客绑定存储（~/.dsh/im-channel/bindings.json）
+│   ├── router.ts    消息路由：命令门禁 → 数字分身路由（访客→Owner 会话）→ driver.prompt → TurnSink
+│   ├── render.ts    /回复 三档的实时视图与终稿渲染
+│   └── guest-permissions.ts  访客工具/命令白名单（模式匹配 + 目录）
 ├── plugin/
-│   ├── driver.ts    AgentDriver 实现：ctx.agents.create + followup + whenIdle
+│   ├── driver.ts    AgentDriver：create/resume + followup + whenIdle + tools.guard 访客门禁
+│   ├── login-api.ts 浏览器侧 HTTP：扫码登录 / 绑定管理 / 访客权限读写
 │   └── index.ts     Cordis 插件入口（inject agents）
-└── channels/        各平台适配器（逐个实现）
-    feishu / wechat / qq / dingtalk
+└── channels/        平台适配器
+    feishu / wechat / wecom (+ mcp-server-manager 通用 MCP 管理)
 ```
 
 ## 数据流
@@ -27,28 +31,36 @@ im-channel 插件（外部包，经 dsh plugin --profile <p> add 安装）
                             （飞书：一张可刷新的 markdown 卡片；微信：批量增量消息）
                           → agent 事件流边收集边 onUpdate(view) 推过程
                           → whenIdle() 落定 → sink.finish(终稿)
-          ← TurnSink 内部按平台频控节流（飞书 ~2.2s patch 一次；微信 ~3s 增量一批）
+          ← TurnSink 按平台能力与频控节流：
+             飞书 CardKit 流式卡片（平台端打字机，~0.9s 全量快照；缺 cardkit:card:write 权限时
+             降级 message.patch 整刷 → 再降级文本编辑）；微信 ~3s 增量一批；企业微信 replyStream
 ```
 
+- **数字分身路由**：`bind-store.ownerFor(kind)` 找渠道 Owner；访客消息动态路由到 Owner 会话
+  （promptOptions.actor=guest），消息带 `[访客·姓名]` 前缀；未认领渠道回复初始化提示。
+- **访客工具门禁**：driver 在 agent setup 注册 `agentCtx.tools.guard()`（单调、只能拒绝）——
+  访客轮次中未命中 guestTools 白名单（精确名/`前缀*`）的工具调用被拒绝，文案面向模型；
+  Owner 轮次不受影响，轮次结束恢复。
 - **打断**：执行中收到新消息 → `agent.cancel(user)` + 等旧 turn 落定（8s 超时强制收尾）→ 旧轮以「⏹ 已被中断 + 部分输出」收尾，新消息作为新输入。
-- **会话恢复**：绑定持久化于 `bindings.json`，进程重启后 driver 的 owned 表为空；router 在 prompt 前懒重连（`agents.create` 同 sessionId = resume），失败才提示重新 `/bind`。
-- **verbosity**：`/回复` 三档映射为 sink 模式 —— 简洁=quiet（只推工具计数+终稿末条）、标准=normal（文字段落流式）、详细=verbose（工具+文字流式）；终稿渲染见 `core/render.ts`。
+- **会话恢复**：绑定持久化于 `bindings.json`，进程重启后 driver 的 owned 表为空；router 在 prompt 前懒重连（`agents.resume(resumeSessionId)`），失败则为 Owner 重建分身并更新锚点，访客随锚点跟随。遗留绑定（无 isMaster）加载时自动晋升最早行为 Owner。
+- **verbosity**：`/回复` 三档映射为 sink 模式 —— 简洁=quiet（只推工具计数+终稿末条）、标准=normal（文字段落流式，基于 assistant/chunk text-delta 增量）、详细=verbose（工具+文字流式）；渲染见 `core/render.ts`。
 
-## 两条绑定线（互相独立）
+## 渠道接入与所有权（两条独立线）
 
-1. **机器人凭证（扫码）**——终端渲染二维码，手机扫码，凭证存 `~/.dsh/im-channel/credentials/<kind>.json`（0600）。每平台 SDK 原生支持。
-2. **用户绑定（口令）**——harness 启动时终端显示 `BIND-XXXXXX`（10 分钟一次性）；用户在 IM 里发 `/bind BIND-XXXXXX`，通过后该 IM 用户绑定到一个新建 session。
+1. **机器人凭证**——飞书/微信在设置页扫码、企业微信填 BotID+Secret；凭证存 `~/.dsh/im-channel/credentials/<kind>.json`（0600）。
+2. **分身所有权（认领制）**——渠道内第一个 `/bind` 的用户成为 Owner（绑定行 isMaster=true，
+   `ownerFor` 取每渠道最早者）；其余用户即访客，无需绑定。Owner `/unbind` 释放渠道可交接。
 
-## 四平台
+## 渠道
 
-| 平台 | 传输 | 登录 | SDK |
+| 平台 | 传输 | 接入 | 流式回复 |
 |---|---|---|---|
-| feishu | WSClient 长连接 | 自建应用 appId/secret（可 OAuth 扫码） | @larksuiteoapi/node-sdk |
-| wechat | iLink 长轮询 getupdates | 终端二维码（移植 openclaw-weixin，MIT） | 自实现 api/ 模块 |
-| qq | 官方 bot WebSocket | qqbot-connector qrConnect() 扫码回凭证 | @tencent-connect/qqbot-connector |
-| dingtalk | dingtalk-stream WS | 群内自定义机器人（勾 Stream 模式）→ clientId/secret | dingtalk-stream |
+| feishu | WSClient 长连接 | 自建应用 appId/secret，设置页扫码 | CardKit 流式卡片（打字机）→ 卡片整刷 → 文本编辑 |
+| wechat | iLink 长轮询 getupdates | 设置页扫码（移植 openclaw-weixin，MIT） | 批量增量消息（协议无编辑能力） |
+| wecom | 智能机器人回调 + 主动推送 | 设置页填 BotID + Secret | replyStream 流式（不可用时一次性回复） |
 
-实施顺序：wechat → qq → feishu → dingtalk（用户价值 × 实现难度权衡）。
+远期规划：QQ、钉钉。另含通用 MCP 服务器管理（streamable-http，凭证
+`~/.dsh/im-channel/credentials/mcp-servers.json`），注册进分身会话。
 
 ## Harness 集成（机制已验证）
 
@@ -96,17 +108,21 @@ agent 发起 tool/call
 - 多用户授权分流（一会话绑一用户已经够用）
 - 微信端审批 UI（协议不支持编辑已发消息，只能跑批量；审批先以飞书为准）
 
-## 配置（cordis.yml 示例）
+## 配置（settings.yaml `im-channel:` 节）
 
 ```yaml
-- id: im-channel
-  name: '@dsh-extra/im-channel'
-  inject: [agents]
-  config:
-    channels:
-      feishu: { enabled: true, appIdEnv: FEISHU_APP_ID, appSecretEnv: FEISHU_APP_SECRET }
-      wechat: { enabled: true }
-      qq: { enabled: true }
-      dingtalk: { enabled: false, clientIdEnv: DINGTALK_CLIENT_ID, clientSecretEnv: DINGTALK_CLIENT_SECRET }
-    commandPrefix: "/"
+im-channel:
+  channels:                 # 渠道实例（设置页自动维护；凭证齐备且启用才连接）
+    feishu-1: { kind: feishu, enabled: true, displayName: 飞书机器人 1 }
+    wechat-1: { kind: wechat, enabled: true, displayName: 微信机器人 1 }
+    wecom-1: { kind: wecom, enabled: true, displayName: 企微机器人 1 }
+  commandPrefix: "/"
+  allowlist: []             # 用户白名单（userId 或 kind:userId）；空 = 不限
+  guestTools: []            # 访客可用工具（精确名/前缀*）；空 = 纯对话
+  guestCommands: [帮助, 状态, 回复, 停止]   # 访客可用命令
 ```
+
+浏览器侧 HTTP（webServer exact 路由，LoginApi 注册）：
+`/im-channel/login/start|status`（扫码）、`/im-channel/bindings(|/remove)`、
+`/im-channel/guest-permissions(|/update)`、`/im-channel/mcp-servers(|/add|/update|/remove)`、
+`/im-channel/wecom/configure`。

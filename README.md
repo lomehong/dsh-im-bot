@@ -1,7 +1,8 @@
 # dsh-im-bot — 手机接入 DeepSeek Harness
 
-把你的 **微信 / 飞书** 变成 DeepSeek Harness（dsh）智能体的入口：手机扫码创建机器人，
-在 IM 里直接选项目、发消息、调用 harness 智能体的全部工具能力。
+把 **飞书 / 微信 / 企业微信** 变成你的 DeepSeek Harness（dsh）数字分身入口：
+Owner 扫码（或配置）接入机器人后，在 IM 里直接对话、调用 harness 智能体的全部工具能力，
+其他所有人零门槛直接使用。
 
 ![手机连接设置页](assets/settings-preview.png)
 
@@ -35,13 +36,13 @@ curl -fsSL https://raw.githubusercontent.com/lomehong/dsh-im-bot/main/install.mj
 
 脚本会自动写入 web profile、安装两个包并注册 bundle，可重复执行（用于升级）。完成后重启 `dsh web` 即可。
 
-重启后终端出现下面的日志，说明插件加载成功、两个渠道都已连接：
+重启后终端出现下面的日志，说明插件加载成功、渠道已连接（未配置凭证的渠道自动跳过）：
 
 ```
 [info]: [ 'client ready' ]
 [info]: [ 'event-dispatch is ready' ]
 [im-channel] feishu 长连接已建立
-[im-channel] wechat getupdates ret=undefined errcode=undefined msgs=0 bufLen=104
+[im-channel] wechat getupdates ret=0 errcode=0 msgs=0 bufLen=104
 ```
 
 <details>
@@ -72,15 +73,11 @@ cd ~/.dsh/profiles/web && pnpm add \
 </table>
 
 1. 打开网页 → 设置 → 插件 → **手机连接**。
-2. 点微信或飞书卡片，用手机扫码（二维码可点击刷新）。
-3. 扫码成功后页面会提示发送 `/bind`。
-4. 在 IM 里对机器人发送：
-
-```
-/bind          绑定当前聊天（必须第一步）
-/项目          选择工作区（选完自动开新线程）
-你好           直接开始对话
-```
+2. 接入渠道（三选一或多选）：
+   - **飞书 / 微信**：点对应卡片，用手机扫码（二维码可点击刷新）；
+   - **企业微信**：点卡片后填写 BotID 与 Secret（在[企业微信智能机器人](https://open.work.weixin.qq.com/)后台创建）。
+3. 在 IM 里对机器人发送 `/bind` **认领分身**（只有 Owner 需要这一步），再发 `/项目` 选择工作区。
+4. 其他人**什么都不用做**，直接发消息即可与你的数字分身对话。
 
 ### 数字分身模式
 
@@ -95,27 +92,36 @@ cd ~/.dsh/profiles/web && pnpm add \
 
 对话过程实时同步到 IM，不再「黑屏等结果」：
 
-- **飞书**：每轮对话是一张不断刷新的 markdown 卡片 —— 先看到「正在思考…」，工具调用和文字段落边生成边上屏，结束后卡片定稿为完整回复（代码块带语法高亮）。
+- **飞书**：优先使用 CardKit 流式卡片——文字以**打字机效果逐字上屏**，结束后定稿为完整 markdown 回复（代码块高亮）。需要在开放平台给应用开通 `cardkit:card:write` 权限；未开通时自动降级为卡片整刷（约每秒一次）。
 - **微信**：过程按批次追加消息（协议不支持编辑已发消息），只发增量。
+- **企业微信**：走智能机器人的流式回复通道；不可用时降级为最终一次性回复。
 - **打断**：agent 执行中直接发新消息即可打断当前任务并开始新输入，不需要先 `/停止`。
-- **会话恢复**：`dsh web` 重启后无需重新 `/bind`，绑定会话自动重连，历史上下文继续可用。
+- **会话恢复**：`dsh web` 重启后无需重新 `/bind`，分身会话自动重连（历史上下文继续）；确实无法恢复时自动重建，访客无感跟随。
 
 回复详细程度（`/回复`）控制流式推送的粒度：**简洁**=过程只显示工具计数、只发最后一条 AI 消息；**标准**=文字段落边生成边推送（默认）；**详细**=工具调用过程 + 全部 AI 消息实时推送。
 
 ### 机器人命令
 
-| 命令 | 说明 |
-|---|---|
-| `/bind` | 绑定当前聊天到 harness 会话 |
-| `/unbind` | 解绑 |
-| `/项目` / `/项目 N` | 查看 / 切换工作区（新开线程） |
-| `/新建` 或 `/clear` | 清空上下文，开新任务 |
-| `/模型` / `/模型 N` | 查看 / 切换模型 |
-| `/思考 N` | 切换思考级别（按当前模型支持的级别列出） |
-| `/回复 N` | 流式推送详细程度：1 简洁 / 2 标准 / 3 详细 |
-| `/停止` | 中断正在执行的任务 |
-| `/状态` | 查看当前会话与模型 |
-| `/帮助` | 命令列表 |
+管理命令仅 Owner 可用；访客可用命令默认为 帮助/状态/回复/停止，Owner 可在「访客权限」面板调整。
+
+| 命令 | 权限 | 说明 |
+|---|---|---|
+| `/bind` | 未认领时任何人 | 认领本渠道的数字分身（成为 Owner）；已有 Owner 时其他人执行会被拒绝 |
+| `/unbind` | Owner | 释放分身（渠道回到未认领态，下一个 `/bind` 者接任） |
+| `/项目` / `/项目 N` | Owner | 查看 / 切换工作区（新开线程） |
+| `/新建` 或 `/clear` | Owner | 清空分身上下文，开新任务 |
+| `/模型` / `/模型 N` | Owner | 查看 / 切换模型 |
+| `/思考 N` | Owner | 切换思考级别（按当前模型支持的级别列出） |
+| `/回复 N` | 访客可用 | 流式推送详细程度（个人偏好）：1 简洁 / 2 标准 / 3 详细 |
+| `/停止` | 访客可用 | 中断分身正在执行的任务 |
+| `/状态` | 访客可用 | 查看工作区、模型、分身会话与自己的身份 |
+| `/帮助` | 访客可用 | 命令列表 |
+
+### MCP 服务器管理
+
+设置页「手机连接」标签底部可管理 MCP 服务器（streamable-http 协议）：添加/编辑/删除服务器后，
+其工具会注册到分身会话中，模型可直接调用。访客能否使用 MCP 工具由访客权限白名单控制
+（可用前缀通配如 `mcp__wecom*` 放行整个命名空间）。
 
 ### 访问控制（可选）
 
@@ -134,11 +140,16 @@ im-channel:
 
 ```sh
 git clone https://github.com/lomehong/dsh-im-bot.git
-cd dsh-im-bot/im-channel && pnpm install && pnpm build
+cd dsh-im-bot/im-channel && pnpm install && pnpm build && pnpm test   # 63 个单测
 cd ../ui-settings-im && pnpm install && pnpm build
 ```
 
 构建产物 `lib/` 随仓库提交，GitHub 安装无需本地构建步骤。
+
+本机联调（改码即时生效）：`node refresh-local.mjs` 会构建 im-channel 并把两个包的产物
+直接同步进 `~/.dsh/profiles/web`（绕过 pnpm 对本地包的缓存），之后重启 `dsh web` 即可。
+注意：若改动涉及 im-channel 的依赖清单（package.json dependencies），需把版本号 +0.0.x
+后在 profile 里 `pnpm install`，运行时依赖才会跟进。
 
 ## 许可证
 
