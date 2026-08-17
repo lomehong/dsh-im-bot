@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.51.0",
+    "@wecom/aibot-node-sdk": "^1.0.7",
     "ws": "^8.21.3"
   },
   "peerDependencies": {

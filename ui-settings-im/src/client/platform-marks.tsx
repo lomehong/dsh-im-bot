@@ -33,3 +33,13 @@ export function FeishuMark(props: MarkProps) {
   return <MarkImg {...props} src={FEISHU_PNG} />
 }
 
+/** 企业微信品牌图标（绿色方块 + 白色对话气泡） */
+export function WecomMark({ size = 26 }: MarkProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="2" y="2" width="20" height="20" rx="4" fill="#2A9D8F" />
+      <path fill="#FFFFFF" d="M7 10a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-1.5l-2 2v-2H8a1 1 0 0 1-1-1v-4z" />
+    </svg>
+  )
+}
+

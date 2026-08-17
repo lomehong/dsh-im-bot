@@ -28,6 +28,7 @@ export function StepsPanel({ kind, t }: StepsPanelProps) {
         ))}
       </ol>
       {kind === 'wechat' && <p className={css.stepNote}>{t('note.wechat.verifycode')}</p>}
+      {kind === 'wecom' && <p className={css.stepNote}>{t('note.wecom')}</p>}
     </div>
   )
 }

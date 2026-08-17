@@ -103,11 +103,19 @@ export class Router {
                 this.log(`[im-channel] 会话 ${sessionId.slice(0, 8)}… 重连成功`);
             }
             catch (error) {
-                this.log(`[im-channel] 会话 ${sessionId.slice(0, 8)}… 重连失败: ${messageOf(error)}`);
-                await this.safeSend(channel, target, { text: '⚠️ 会话已失效（服务重启过）。请发送 /bind 重新绑定。' });
-                return;
+                this.log(`[im-channel] 会话 ${sessionId.slice(0, 8)}… 重连失败，将创建新会话: ${messageOf(error)}`);
+                // 恢复失败时创建新会话，并更新绑定，避免用户需要重新 /bind
+                const newSessionId = await this.startUserSession(message.from);
+                this.deps.store.bind(message.from, newSessionId);
+                this.deps.store.rememberTarget?.(message.from, target.targetId);
+                // 使用新 sessionId 继续
+                return await this.handleBoundMessage(channel, target, message, newSessionId);
             }
         }
+        await this.handleBoundMessage(channel, target, message, sessionId);
+    }
+    /** 处理已绑定的会话消息：发送到 agent 并回复 */
+    async handleBoundMessage(channel, target, message, sessionId) {
         const verbosity = this.deps.store.verbosityFor?.(message.from);
         const sink = await this.openSink(channel, target, modeOf(verbosity));
         try {

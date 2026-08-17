@@ -5,6 +5,7 @@ export const zh = {
   cards: '平台',
   'card.wechat': '微信',
   'card.feishu': '飞书',
+  'card.wecom': '企业微信',
   'qr.waiting': '正在获取二维码…',
   'qr.alt': '登录二维码',
   'qr.refresh': '刷新二维码',
@@ -30,6 +31,12 @@ export const zh = {
   'step.feishu.2': '在飞书授权页选择「创建新应用」或绑定已有应用。',
   'step.feishu.3': '确认授权——应用会自动配好机器人能力与事件订阅。',
   'step.feishu.4': '页面提示「登录成功」后，即可在飞书里与机器人对话。',
+  'steps.title.wecom': '企业微信接入步骤',
+  'step.wecom.1': '登录企业微信管理后台（work.weixin.qq.com）。',
+  'step.wecom.2': '进入「应用 → 智能机器人」页面，创建或选中一个机器人。',
+  'step.wecom.3': '在「API 接收事件」中选择「长连接」模式，复制 BotID 和 Secret。',
+  'step.wecom.4': '在下方输入框中粘贴 BotID 和 Secret，点击保存即可连接。',
+  'note.wecom': 'BotID 和 Secret 仅保存在本地，不会上传到任何第三方服务器。',
 } as const
 
 /** en copy for the Bot Channel tab. */
@@ -39,6 +46,7 @@ export const en = {
   cards: 'Platform',
   'card.wechat': 'WeChat',
   'card.feishu': 'Feishu',
+  'card.wecom': 'WeCom',
   'qr.waiting': 'Fetching QR code…',
   'qr.alt': 'Login QR code',
   'qr.refresh': 'Refresh QR code',
@@ -64,6 +72,12 @@ export const en = {
   'step.feishu.2': 'Choose "create a new app" or bind an existing one.',
   'step.feishu.3': 'Confirm — bot capability and event subscriptions are configured automatically.',
   'step.feishu.4': 'Once the page says connected, chat with your bot in Feishu.',
+  'steps.title.wecom': 'WeCom setup',
+  'step.wecom.1': 'Log in to the WeCom admin console (work.weixin.qq.com).',
+  'step.wecom.2': 'Go to "Apps → Intelligent Bot" and create or select a bot.',
+  'step.wecom.3': 'Under "API Event Receiving", choose "Long Connection" mode, then copy BotID and Secret.',
+  'step.wecom.4': 'Paste BotID and Secret in the form below and click Save to connect.',
+  'note.wecom': 'BotID and Secret are stored locally and never sent to any third-party server.',
 } as const
 
 export type ImKey = keyof typeof zh

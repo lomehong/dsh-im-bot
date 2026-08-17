@@ -5,11 +5,12 @@ import { Router } from "../core/router.js";
 import { HarnessDriver } from "./driver.js";
 import { WechatChannel, loadWechatCredentials } from "../channels/wechat/index.js";
 import { FeishuChannel, loadFeishuCredentials } from "../channels/feishu/index.js";
+import { WecomChannel, loadWecomCredentials } from "../channels/wecom/index.js";
 import { LoginApi } from "./login-api.js";
 export const name = 'im-channel';
 export const inject = ['agents'];
 const NS = settingsNamespace('im-channel');
-const KindUnion = z.union(['feishu', 'wechat']);
+const KindUnion = z.union(['feishu', 'wechat', 'wecom']);
 const InstanceSchema = z.object({
     kind: KindUnion,
     enabled: z.boolean().default(true),
@@ -24,6 +25,7 @@ function isCredentialled(kind) {
     switch (kind) {
         case 'wechat': return loadWechatCredentials() !== undefined;
         case 'feishu': return loadFeishuCredentials() !== undefined;
+        case 'wecom': return loadWecomCredentials() !== undefined;
     }
 }
 /** Build one channel instance from its declared config. */
@@ -32,6 +34,7 @@ function buildChannel(kind, ctx) {
     switch (kind) {
         case 'wechat': return new WechatChannel({ ctxLog: log });
         case 'feishu': return new FeishuChannel({ log });
+        case 'wecom': return new WecomChannel({ log });
     }
 }
 export function apply(ctx, config) {
@@ -179,10 +182,10 @@ function sameTopology(router, next) {
 }
 /** Auto-create instances for platforms that have credentials but no row. */
 async function ensureInstancesForCredentials(ctx, next) {
-    const KIND_LABELS = { wechat: '微信', feishu: '飞书' };
+    const KIND_LABELS = { wechat: '微信', feishu: '飞书', wecom: '企业微信' };
     const patch = {};
     let changed = false;
-    for (const kind of ['wechat', 'feishu']) {
+    for (const kind of ['wechat', 'feishu', 'wecom']) {
         if (!isCredentialled(kind))
             continue;
         const sameKind = Object.entries(next.channels).filter(([, v]) => v.kind === kind);

@@ -6,6 +6,7 @@ import { Router, type RouterStatus } from '../core/router.ts'
 import { HarnessDriver } from './driver.ts'
 import { WechatChannel, loadWechatCredentials } from '../channels/wechat/index.ts'
 import { FeishuChannel, loadFeishuCredentials } from '../channels/feishu/index.ts'
+import { WecomChannel, loadWecomCredentials } from '../channels/wecom/index.ts'
 import { LoginApi } from './login-api.ts'
 import type { ChannelKind, ImChannel } from '../core/channel.ts'
 
@@ -29,7 +30,7 @@ export interface ImChannelSection {
   allowlist: string[]
 }
 
-const KindUnion = z.union(['feishu', 'wechat'])
+const KindUnion = z.union(['feishu', 'wechat', 'wecom'])
 
 const InstanceSchema = z.object({
   kind: KindUnion,
@@ -47,6 +48,7 @@ function isCredentialled(kind: ChannelKind): boolean {
   switch (kind) {
     case 'wechat': return loadWechatCredentials() !== undefined
     case 'feishu': return loadFeishuCredentials() !== undefined
+    case 'wecom': return loadWecomCredentials() !== undefined
   }
 }
 
@@ -56,6 +58,7 @@ function buildChannel(kind: ChannelKind, ctx: Context): ImChannel {
   switch (kind) {
     case 'wechat': return new WechatChannel({ ctxLog: log })
     case 'feishu': return new FeishuChannel({ log })
+    case 'wecom': return new WecomChannel({ log })
   }
 }
 
@@ -195,10 +198,10 @@ function sameTopology(router: Router, next: ImChannelSection): boolean {
 
 /** Auto-create instances for platforms that have credentials but no row. */
 async function ensureInstancesForCredentials(ctx: Context, next: ImChannelSection): Promise<void> {
-  const KIND_LABELS: Record<ChannelKind, string> = { wechat: '微信', feishu: '飞书' }
+  const KIND_LABELS: Record<ChannelKind, string> = { wechat: '微信', feishu: '飞书', wecom: '企业微信' }
   const patch: Record<string, { kind: ChannelKind; enabled: boolean; displayName: string }> = {}
   let changed = false
-  for (const kind of ['wechat', 'feishu'] as const) {
+  for (const kind of ['wechat', 'feishu', 'wecom'] as const) {
     if (!isCredentialled(kind)) continue
     const sameKind = Object.entries(next.channels).filter(([, v]) => v.kind === kind)
     if (sameKind.length > 0) continue

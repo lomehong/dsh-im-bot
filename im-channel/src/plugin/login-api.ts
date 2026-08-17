@@ -11,12 +11,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 
-type LoginKind = 'wechat' | 'feishu'
-const KINDS: readonly LoginKind[] = ['wechat', 'feishu']
+type LoginKind = 'wechat' | 'feishu' | 'wecom'
+const KINDS: readonly LoginKind[] = ['wechat', 'feishu', 'wecom']
 
 const KIND_LABELS: Record<LoginKind, string> = {
   wechat: '微信',
   feishu: '飞书',
+  wecom: '企业微信',
 }
 
 const NS = settingsNamespace('im-channel')
@@ -69,6 +70,11 @@ export class LoginApi {
       path: '/im-channel/bindings/remove',
       handler: (req: IncomingMessage, res: ServerResponse) => void this.handleBindingRemove(req, res),
     })
+    web.register({
+      kind: 'exact',
+      path: '/im-channel/wecom/configure',
+      handler: (req: IncomingMessage, res: ServerResponse) => void this.handleWecomConfigure(req, res),
+    })
   }
 
   private async handleBindingRemove(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -81,6 +87,27 @@ export class LoginApi {
       if (typeof body.sessionId === 'string') match.sessionId = body.sessionId
       const removed = removeBinding(match)
       respondJson(res, 200, { ok: true, removed })
+    } catch (error) {
+      respondJson(res, 500, { ok: false, error: messageOf(error) })
+    }
+  }
+
+  private async handleWecomConfigure(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const body = await readJsonBody(req) as { botId?: string; secret?: string }
+      if (typeof body.botId !== 'string' || typeof body.secret !== 'string') {
+        respondJson(res, 400, { ok: false, error: '需要 BotID 和 Secret' })
+        return
+      }
+      const { configureWecomBot } = await import('../channels/wecom/login-bridge.ts')
+      await configureWecomBot(body.botId, body.secret)
+      // 自动创建通道实例
+      await this.ensureChannelInstance('wecom')
+      // 如果当前有登录会话，标记为已确认
+      if (this.session !== undefined && this.session.kind === 'wecom') {
+        this.session.status = 'confirmed'
+      }
+      respondJson(res, 200, { ok: true })
     } catch (error) {
       respondJson(res, 500, { ok: false, error: messageOf(error) })
     }
@@ -185,6 +212,12 @@ export class LoginApi {
           const { beginFeishuQrLogin } = await import('../channels/feishu/login-bridge.ts')
           await beginFeishuQrLogin(session)
           break
+        }
+        case 'wecom': {
+          const { beginWecomLogin } = await import('../channels/wecom/login-bridge.ts')
+          await beginWecomLogin(session)
+          // 企业微信不需要扫码，保持 pending 状态，等待用户提交表单
+          return
         }
       }
       session.status = 'confirmed'

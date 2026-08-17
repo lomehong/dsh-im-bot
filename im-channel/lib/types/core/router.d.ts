@@ -126,6 +126,8 @@ export declare class Router {
     private openSink;
     /** Route one inbound message: commands first, then bound-session chat. */
     private routeMessage;
+    /** 处理已绑定的会话消息：发送到 agent 并回复 */
+    private handleBoundMessage;
     /** Handle slash commands (Chinese primary, English aliases). */
     private runCommand;
 }

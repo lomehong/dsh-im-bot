@@ -16,6 +16,7 @@ export declare class LoginApi {
     /** Register the /im-channel/login/* routes on the web server. */
     register(): void;
     private handleBindingRemove;
+    private handleWecomConfigure;
     /**
      * Auto-create a channel instance in settings once a platform login is
      * confirmed so the router (re)starts without manual configuration. One

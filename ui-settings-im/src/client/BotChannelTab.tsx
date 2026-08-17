@@ -11,7 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { Kind } from './store.ts'
-import { FeishuMark, WechatMark } from './platform-marks.tsx'
+import { FeishuMark, WechatMark, WecomMark } from './platform-marks.tsx'
 import css from './BotChannelTab.module.css'
 import { QrPanel, type LoginStatus } from './QrPanel.tsx'
 import { StepsPanel } from './StepsPanel.tsx'
@@ -34,6 +34,7 @@ const BINDINGS_POLL_INTERVAL_MS = 10_000
 const CARD_MARKS = {
   wechat: WechatMark,
   feishu: FeishuMark,
+  wecom: WecomMark,
 } as const
 
 export function BotChannelTab(props: BotChannelTabProps) {
@@ -181,6 +182,7 @@ export function BotChannelTab(props: BotChannelTabProps) {
   const cards: Array<{ kind: Kind; label: string }> = [
     { kind: 'wechat', label: t('card.wechat') },
     { kind: 'feishu', label: t('card.feishu') },
+    { kind: 'wecom', label: t('card.wecom') },
   ]
 
   return (

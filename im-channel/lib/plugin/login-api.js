@@ -5,10 +5,11 @@
  * only brokers the credential exchange.
  */
 import { settingsNamespace } from '@deepseek-ai/dsh-settings';
-const KINDS = ['wechat', 'feishu'];
+const KINDS = ['wechat', 'feishu', 'wecom'];
 const KIND_LABELS = {
     wechat: '微信',
     feishu: '飞书',
+    wecom: '企业微信',
 };
 const NS = settingsNamespace('im-channel');
 const SESSION_TTL_MS = 8 * 60_000;
@@ -45,6 +46,11 @@ export class LoginApi {
             path: '/im-channel/bindings/remove',
             handler: (req, res) => void this.handleBindingRemove(req, res),
         });
+        web.register({
+            kind: 'exact',
+            path: '/im-channel/wecom/configure',
+            handler: (req, res) => void this.handleWecomConfigure(req, res),
+        });
     }
     async handleBindingRemove(req, res) {
         try {
@@ -59,6 +65,27 @@ export class LoginApi {
                 match.sessionId = body.sessionId;
             const removed = removeBinding(match);
             respondJson(res, 200, { ok: true, removed });
+        }
+        catch (error) {
+            respondJson(res, 500, { ok: false, error: messageOf(error) });
+        }
+    }
+    async handleWecomConfigure(req, res) {
+        try {
+            const body = await readJsonBody(req);
+            if (typeof body.botId !== 'string' || typeof body.secret !== 'string') {
+                respondJson(res, 400, { ok: false, error: '需要 BotID 和 Secret' });
+                return;
+            }
+            const { configureWecomBot } = await import("../channels/wecom/login-bridge.js");
+            await configureWecomBot(body.botId, body.secret);
+            // 自动创建通道实例
+            await this.ensureChannelInstance('wecom');
+            // 如果当前有登录会话，标记为已确认
+            if (this.session !== undefined && this.session.kind === 'wecom') {
+                this.session.status = 'confirmed';
+            }
+            respondJson(res, 200, { ok: true });
         }
         catch (error) {
             respondJson(res, 500, { ok: false, error: messageOf(error) });
@@ -163,6 +190,12 @@ export class LoginApi {
                     const { beginFeishuQrLogin } = await import("../channels/feishu/login-bridge.js");
                     await beginFeishuQrLogin(session);
                     break;
+                }
+                case 'wecom': {
+                    const { beginWecomLogin } = await import("../channels/wecom/login-bridge.js");
+                    await beginWecomLogin(session);
+                    // 企业微信不需要扫码，保持 pending 状态，等待用户提交表单
+                    return;
                 }
             }
             session.status = 'confirmed';

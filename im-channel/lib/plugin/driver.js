@@ -199,16 +199,33 @@ export class HarnessDriver {
         return true;
     }
     async prompt(sessionId, text, options = {}) {
-        const record = this.owned.get(sessionId);
-        this.ctx.logger?.debug?.(`prompt ${sessionId.slice(0, 8)} owned=${this.owned.size} found=${record !== undefined} (driver ${this.instanceId})`);
+        let record = this.owned.get(sessionId);
+        // 如果 session 不在内存中（例如服务重启后第一次对话），尝试恢复
         if (record === undefined) {
-            // A binding persisted across a harness restart points at a session this
-            // driver never created — tell the router instead of crashing the host.
-            throw new Error(`会话 ${sessionId.slice(0, 8)} 已失效（服务重启过）。请发送 /bind 重新绑定。`);
+            this.ctx.logger?.info?.(`prompt ${sessionId.slice(0, 8)} 不在内存中，尝试恢复会话 (driver ${this.instanceId})`);
+            try {
+                await this.resumeSession(sessionId);
+                record = this.owned.get(sessionId);
+            }
+            catch (resumeError) {
+                this.ctx.logger?.warn?.(`prompt ${sessionId.slice(0, 8)} 恢复失败，将创建新会话: ${messageOf(resumeError)} (driver ${this.instanceId})`);
+            }
         }
-        // Mobile chat UX: new input interrupts the running turn instead of
-        // erroring. Cancel it, let the old promise settle with its partial
-        // output, then submit the new message.
+        // 如果恢复失败，创建一个新会话（保持相同的 sessionId，不丢失绑定）
+        if (record === undefined) {
+            this.ctx.logger?.info?.(`prompt ${sessionId.slice(0, 8)} 创建新会话 (driver ${this.instanceId})`);
+            try {
+                const cwd = normalizeCwd(this.options.cwd ?? process.cwd());
+                await this.createAgent(SessionId(sessionId), cwd);
+                record = this.owned.get(sessionId);
+            }
+            catch (createError) {
+                this.ctx.logger?.error?.(`prompt ${sessionId.slice(0, 8)} 创建新会话也失败: ${messageOf(createError)} (driver ${this.instanceId})`);
+                throw new Error(`会话创建失败，请发送 /bind 重新绑定。`);
+            }
+        }
+        // 此时 record 必定存在（恢复了、创建了新会话、或抛出了错误）
+        // 断言非空，后面的代码不需要再检查 undefined
         const prior = record.inflight;
         if (prior !== undefined) {
             prior.interrupted = true;
@@ -292,4 +309,7 @@ function turnFailureText(reason) {
 }
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+function messageOf(error) {
+    return error instanceof Error ? error.message : String(error);
 }

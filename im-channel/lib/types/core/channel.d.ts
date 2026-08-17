@@ -7,7 +7,7 @@ export type ImUserId = string & {
     readonly [IM_USER_ID_BRAND]: true;
 };
 /** Identifies which platform a message/binding came from. */
-export type ChannelKind = 'feishu' | 'wechat';
+export type ChannelKind = 'feishu' | 'wechat' | 'wecom';
 /** A (platform, user) pair; unique key for the binding store. */
 export interface ImUserRef {
     readonly kind: ChannelKind;
