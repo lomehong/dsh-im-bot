@@ -25,6 +25,8 @@ export interface PromptOptions {
     verbosity?: string;
     /** Live progress sink: full snapshot of the turn so far, verbosity-filtered. */
     onUpdate?(view: string): void;
+    /** Who initiated the turn: the channel owner or a guest (drives tool gating). */
+    actor?: 'owner' | 'guest';
 }
 /** Per-session knobs a /新建 or /bind session can carry. */
 export interface SessionOptions {
@@ -82,6 +84,8 @@ export interface RouterDeps {
         id: string;
         name: string;
     }>>;
+    /** Commands a guest may run (canonical ids); absent = DEFAULT_GUEST_COMMANDS. */
+    readonly guestCommands?: () => readonly string[];
     /** Diagnostic sink (wired to the host logger); absent = silent. */
     readonly log?: (line: string) => void;
     /**
@@ -95,6 +99,14 @@ export interface BindStoreLike {
     bind(ref: InboundMessage['from'], sessionId: string, isMaster?: boolean): void;
     sessionIdFor(ref: InboundMessage['from']): string | undefined;
     isMasterFor?(ref: InboundMessage['from']): boolean;
+    /**
+     * The channel owner (first isMaster row per channel kind) whose session is
+     * the digital avatar everyone else rides; undefined = channel uninitialized.
+     */
+    ownerFor?(kind: InboundMessage['from']['kind']): {
+        userId: string;
+        sessionId: string;
+    } | undefined;
     unbind(ref: InboundMessage['from']): boolean;
     /** Cycle the per-user reply verbosity (/回复); optional. */
     cycleVerbosity?(ref: InboundMessage['from']): string | undefined;
@@ -127,6 +139,11 @@ export declare class Router {
     private openSink;
     /** Route one inbound message: commands first, then bound-session chat. */
     private routeMessage;
+    /**
+     * Prompt the owner's avatar session (resuming it after host restarts) and
+     * stream the reply back, whether the actor is the owner or a guest.
+     */
+    private promptAvatarSession;
     /** 处理已绑定的会话消息：发送到 agent 并回复 */
     private handleBoundMessage;
     /** Handle slash commands (Chinese primary, English aliases). */

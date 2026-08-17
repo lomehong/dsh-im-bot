@@ -31,6 +31,13 @@ export declare class BindStore {
     constructor();
     /** Loaded rows (lazily read from disk once per process). */
     private rows;
+    /**
+     * One-time migration for rows created before the digital-avatar model: a
+     * channel whose only rows predate isMaster would look unowned and strand
+     * its users behind the setup hint. Promote the earliest binding of each
+     * ownerless channel to owner.
+     */
+    private migrateLegacyOwners;
     private scheduleFlush;
     /** Flush pending mutations now (used by tests and shutdown paths). */
     flushSync(): void;
@@ -41,6 +48,15 @@ export declare class BindStore {
     sessionIdFor(ref: ImUserRef): string | undefined;
     /** 检查用户是否为主人（通过 /bind 绑定） */
     isMasterFor(ref: ImUserRef): boolean;
+    /**
+     * The channel owner (digital-avatar claimant): the first isMaster row of a
+     * channel kind. Everyone else on that channel is a guest riding the
+     * owner's session; undefined means the channel is uninitialized.
+     */
+    ownerFor(kind: ImUserRef['kind']): {
+        userId: string;
+        sessionId: string;
+    } | undefined;
     /** Remove a binding. Returns true when a row was removed. */
     unbind(ref: ImUserRef): boolean;
     /** Cycle the per-user reply verbosity 简洁 → 标准 → 详细 → 简洁. */

@@ -2,6 +2,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { SessionId } from '@deepseek-ai/dsh-session';
 import { interruptedNote, modeOf, renderFinal, renderLive } from "../core/render.js";
+import { guestToolDenied, matchesToolPattern } from "../core/guest-permissions.js";
 /** How long a cancelled turn gets to settle before the new prompt forces through. */
 const INTERRUPT_SETTLE_TIMEOUT_MS = 8_000;
 /**
@@ -18,6 +19,10 @@ export class HarnessDriver {
     owned = new Map();
     /** MCP 工具注册表（企业微信） */
     mcpRegistry;
+    /** 访客工具白名单（设置实时读取）；决定 tools.guard 是否放行当前轮的工具调用 */
+    guestTools;
+    /** 当前轮发起者（owner/guest），按会话记录，供 tools.guard 查询 */
+    turnActors = new Map();
     static nextInstanceId = 0;
     instanceId = ++HarnessDriver.nextInstanceId;
     constructor(ctx, options = {}) {
@@ -25,6 +30,7 @@ export class HarnessDriver {
         this.options = options;
         this.agents = ctx.agents;
         this.mcpRegistry = options.mcpRegistry;
+        this.guestTools = options.guestTools ?? (() => []);
         // One plugin-lifetime teardown for all owned agents. Registering per
         // session via ctx.effect inside async callbacks attached the disposers to
         // whatever fiber was running the callback (e.g. a router rebuild's
@@ -133,6 +139,7 @@ export class HarnessDriver {
                 if (this.mcpRegistry !== undefined) {
                     await this.mcpRegistry.registerToAgent(agentCtx);
                 }
+                this.mountGuestGuard(agentCtx, sessionId);
             },
         });
         this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });
@@ -179,12 +186,32 @@ export class HarnessDriver {
                 if (this.mcpRegistry !== undefined) {
                     await this.mcpRegistry.registerToAgent(agentCtx);
                 }
+                this.mountGuestGuard(agentCtx, createOptions.sessionId);
             },
         });
         this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });
         await this.attachWorkspace(handle.agent.id, cwd);
     }
     /** Group the session under the workspace owning its cwd, when registered. */
+    /**
+     * Register the guest tool gate on one agent's scoped context: a monotonic
+     * guard (deny-only, ordering cannot re-allow) that blocks tool calls during
+     * guest-initiated turns unless the tool matches the owner-configured
+     * guestTools allowlist. Owner turns pass through untouched. The guard's
+     * layer is bound to the agent's context, so it disposes with the agent.
+     */
+    mountGuestGuard(agentCtx, sessionId) {
+        const tools = agentCtx.tools;
+        if (tools === undefined || typeof tools.guard !== 'function')
+            return;
+        tools.guard(execution => {
+            if (this.turnActors.get(sessionId) !== 'guest')
+                return undefined;
+            if (matchesToolPattern(execution.name, this.guestTools()))
+                return undefined;
+            return guestToolDenied(execution.name);
+        });
+    }
     async attachWorkspace(sessionId, cwd) {
         // Web-created sessions attach to their workspace explicitly; agents.create
         // does not, so a session here would stay in "ungrouped" even with the
@@ -255,6 +282,9 @@ export class HarnessDriver {
             }
         }
         const mode = modeOf(options.verbosity);
+        // 记录本轮发起者：tools.guard 据此决定是否对工具调用启用访客门禁。
+        if (options.actor !== undefined)
+            this.turnActors.set(sessionId, options.actor);
         const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } });
         return await new Promise((resolve, reject) => {
             let settleResolve;
@@ -299,6 +329,8 @@ export class HarnessDriver {
         inflight.ended = true;
         if (record.inflight === inflight)
             record.inflight = undefined;
+        // 轮次结束即恢复全量工具能力（下一轮若无 actor 记录则默认放行）。
+        this.turnActors.delete(record.agent.id);
         inflight.settleResolve();
         if (outcome.error !== undefined) {
             inflight.reject(outcome.error);

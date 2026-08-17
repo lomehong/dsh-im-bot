@@ -2,6 +2,7 @@ import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-sett
 import z from '@deepseek-ai/schemastery';
 import { BindStore } from "../core/bind-store.js";
 import { Router } from "../core/router.js";
+import { DEFAULT_GUEST_COMMANDS } from "../core/guest-permissions.js";
 import { HarnessDriver } from "./driver.js";
 import { WechatChannel, loadWechatCredentials } from "../channels/wechat/index.js";
 import { FeishuChannel, loadFeishuCredentials } from "../channels/feishu/index.js";
@@ -22,6 +23,8 @@ export const Config = z.object({
     channels: z.dict(InstanceSchema).default({}),
     commandPrefix: z.string().default('/'),
     allowlist: z.array(z.string()).default([]),
+    guestTools: z.array(z.string()).default([]),
+    guestCommands: z.array(z.string()).default([...DEFAULT_GUEST_COMMANDS]),
 });
 function isCredentialled(kind) {
     switch (kind) {
@@ -56,7 +59,7 @@ export function apply(ctx, config) {
     for (const server of enabledServers) {
         mcpRegistry.registerServer({ name: server.name, url: server.url });
     }
-    const driver = new HarnessDriver(ctx, { mcpRegistry });
+    const driver = new HarnessDriver(ctx, { mcpRegistry, guestTools: () => current.guestTools ?? [] });
     // One bind store for the whole plugin lifetime (and process-shared with
     // the login HTTP API): the bound-session rows must survive router
     // rebuilds, and /bind hands out new sessions from it.
@@ -105,6 +108,7 @@ export function apply(ctx, config) {
                         return true;
                     return list.includes(from.userId) || list.includes(`${from.kind}:${from.userId}`);
                 },
+                guestCommands: () => current.guestCommands ?? DEFAULT_GUEST_COMMANDS,
                 status: () => {
                     const selection = ctx.get('agentDefaultModel');
                     if (selection !== undefined) {

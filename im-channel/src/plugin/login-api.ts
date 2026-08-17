@@ -105,6 +105,77 @@ export class LoginApi {
       path: '/im-channel/mcp-servers/remove',
       handler: (req: IncomingMessage, res: ServerResponse) => void this.handleMcpServerRemove(req, res),
     })
+    // 访客权限（数字分身模型）：Owner 在设置页配置访客可用的工具与命令。
+    web.register({
+      kind: 'exact',
+      path: '/im-channel/guest-permissions',
+      handler: (_req: IncomingMessage, res: ServerResponse) => void this.handleGuestPermissions(res),
+    })
+    web.register({
+      kind: 'exact',
+      path: '/im-channel/guest-permissions/update',
+      handler: (req: IncomingMessage, res: ServerResponse) => void this.handleGuestPermissionsUpdate(req, res),
+    })
+  }
+
+  /** GET /im-channel/guest-permissions：当前配置 + 工具/命令目录 + Owner 状态。 */
+  private handleGuestPermissions(res: ServerResponse): void {
+    void (async () => {
+      try {
+        const { GUEST_TOOL_CATALOG, GUEST_COMMAND_CATALOG, DEFAULT_GUEST_COMMANDS } = await import('../core/guest-permissions.ts')
+        const { BindStore } = await import('../core/bind-store.ts')
+        const section = await this.readSettingsSection()
+        const owners: Record<string, { bound: boolean; userId: string }> = {}
+        for (const kind of KINDS) {
+          const owner = BindStore.shared.ownerFor(kind as 'feishu' | 'wechat' | 'wecom')
+          owners[kind] = owner === undefined
+            ? { bound: false, userId: '' }
+            : { bound: true, userId: `${owner.userId.slice(0, 8)}…` }
+        }
+        respondJson(res, 200, {
+          ok: true,
+          guestTools: section.guestTools ?? [],
+          guestCommands: section.guestCommands ?? [...DEFAULT_GUEST_COMMANDS],
+          toolCatalog: GUEST_TOOL_CATALOG,
+          commandCatalog: GUEST_COMMAND_CATALOG,
+          owners,
+        })
+      } catch (error) {
+        respondJson(res, 500, { ok: false, error: messageOf(error) })
+      }
+    })()
+  }
+
+  /** POST /im-channel/guest-permissions/update：保存访客工具/命令白名单。 */
+  private async handleGuestPermissionsUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const body = await readJsonBody(req) as { guestTools?: unknown; guestCommands?: unknown }
+      const patch: { guestTools?: string[]; guestCommands?: string[] } = {}
+      if (Array.isArray(body.guestTools)) patch.guestTools = body.guestTools.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
+      if (Array.isArray(body.guestCommands)) patch.guestCommands = body.guestCommands.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
+      if (Object.keys(patch).length === 0) {
+        respondJson(res, 400, { ok: false, error: 'guestTools/guestCommands 至少提供一个有效数组' })
+        return
+      }
+      await new Promise<void>((resolve, reject) => {
+        this.ctx.inject(['settings'], sctx => {
+          void sctx.settings.update(NS, patch).then(resolve, reject)
+        })
+      })
+      respondJson(res, 200, { ok: true })
+    } catch (error) {
+      respondJson(res, 500, { ok: false, error: messageOf(error) })
+    }
+  }
+
+  /** Read the im-channel settings section values this surface reports. */
+  private async readSettingsSection(): Promise<{ guestTools?: string[]; guestCommands?: string[] }> {
+    return await new Promise(resolve => {
+      this.ctx.inject(['settings'], sctx => {
+        const section = sctx.settings.get(NS) as { guestTools?: string[]; guestCommands?: string[] } | undefined
+        resolve(section ?? {})
+      })
+    })
   }
 
   private async handleBindingRemove(req: IncomingMessage, res: ServerResponse): Promise<void> {

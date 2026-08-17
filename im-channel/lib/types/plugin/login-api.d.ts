@@ -15,6 +15,12 @@ export declare class LoginApi {
     constructor(ctx: Context);
     /** Register the /im-channel/login/* routes on the web server. */
     register(): void;
+    /** GET /im-channel/guest-permissions：当前配置 + 工具/命令目录 + Owner 状态。 */
+    private handleGuestPermissions;
+    /** POST /im-channel/guest-permissions/update：保存访客工具/命令白名单。 */
+    private handleGuestPermissionsUpdate;
+    /** Read the im-channel settings section values this surface reports. */
+    private readSettingsSection;
     private handleBindingRemove;
     private handleWecomConfigure;
     private handleWecomMcpConfigure;

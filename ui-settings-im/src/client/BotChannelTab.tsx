@@ -18,6 +18,7 @@ import { StepsPanel } from './StepsPanel.tsx'
 import { PassphraseCard } from './PassphraseCard.tsx'
 import { WecomConfigPanel } from './WecomConfigPanel.tsx'
 import { McpServersPanel } from './McpServersPanel.tsx'
+import { GuestPermissionsPanel } from './GuestPermissionsPanel.tsx'
 import { BindingsTable, type BindingRow } from './BindingsTable.tsx'
 
 export type { LoginStatus, BindingRow }
@@ -235,6 +236,7 @@ export function BotChannelTab(props: BotChannelTabProps) {
       />
       {!active && <p className={css.bindingsEmpty}>{t('bindings.paused')}</p>}
       <McpServersPanel />
+      <GuestPermissionsPanel />
     </div>
   )
 }

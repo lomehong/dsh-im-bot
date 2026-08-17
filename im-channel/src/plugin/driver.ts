@@ -5,6 +5,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { AgentDriver, PromptOptions } from '../core/router.ts'
 import { interruptedNote, modeOf, renderFinal, renderLive, type VerbosityMode } from '../core/render.ts'
+import { guestToolDenied, matchesToolPattern } from '../core/guest-permissions.ts'
 import type { WecomMcpRegistry } from '../channels/wecom/wecom-mcp-registry.ts'
 
 /** Live-update cadence derived from the /回复 verbosity. */
@@ -52,16 +53,21 @@ export class HarnessDriver implements AgentDriver {
   private readonly owned = new Map<string, { agent: Agent; inflight: InflightTurn | undefined }>()
   /** MCP 工具注册表（企业微信） */
   private readonly mcpRegistry: WecomMcpRegistry | undefined
+  /** 访客工具白名单（设置实时读取）；决定 tools.guard 是否放行当前轮的工具调用 */
+  private readonly guestTools: () => readonly string[]
+  /** 当前轮发起者（owner/guest），按会话记录，供 tools.guard 查询 */
+  private readonly turnActors = new Map<string, 'owner' | 'guest'>()
 
   private static nextInstanceId = 0
   private readonly instanceId = ++HarnessDriver.nextInstanceId
 
   constructor(
     private readonly ctx: Context,
-    private readonly options: { cwd?: string; agentOptions?: AgentOptions; mcpRegistry?: WecomMcpRegistry } = {},
+    private readonly options: { cwd?: string; agentOptions?: AgentOptions; mcpRegistry?: WecomMcpRegistry; guestTools?: () => readonly string[] } = {},
   ) {
     this.agents = ctx.agents
     this.mcpRegistry = options.mcpRegistry
+    this.guestTools = options.guestTools ?? ((): readonly string[] => [])
     // One plugin-lifetime teardown for all owned agents. Registering per
     // session via ctx.effect inside async callbacks attached the disposers to
     // whatever fiber was running the callback (e.g. a router rebuild's
@@ -163,6 +169,7 @@ export class HarnessDriver implements AgentDriver {
         if (this.mcpRegistry !== undefined) {
           await this.mcpRegistry.registerToAgent(agentCtx)
         }
+        this.mountGuestGuard(agentCtx, sessionId)
       },
     })
     this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined })
@@ -208,6 +215,7 @@ export class HarnessDriver implements AgentDriver {
         if (this.mcpRegistry !== undefined) {
           await this.mcpRegistry.registerToAgent(agentCtx)
         }
+        this.mountGuestGuard(agentCtx, createOptions.sessionId)
       },
     })
     this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined })
@@ -215,6 +223,23 @@ export class HarnessDriver implements AgentDriver {
   }
 
   /** Group the session under the workspace owning its cwd, when registered. */
+  /**
+   * Register the guest tool gate on one agent's scoped context: a monotonic
+   * guard (deny-only, ordering cannot re-allow) that blocks tool calls during
+   * guest-initiated turns unless the tool matches the owner-configured
+   * guestTools allowlist. Owner turns pass through untouched. The guard's
+   * layer is bound to the agent's context, so it disposes with the agent.
+   */
+  private mountGuestGuard(agentCtx: unknown, sessionId: string): void {
+    const tools = (agentCtx as { tools?: { guard(guard: (execution: Readonly<{ name: string }>) => string | undefined): unknown } }).tools
+    if (tools === undefined || typeof tools.guard !== 'function') return
+    tools.guard(execution => {
+      if (this.turnActors.get(sessionId) !== 'guest') return undefined
+      if (matchesToolPattern(execution.name, this.guestTools())) return undefined
+      return guestToolDenied(execution.name)
+    })
+  }
+
   private async attachWorkspace(sessionId: string, cwd: string): Promise<void> {
     // Web-created sessions attach to their workspace explicitly; agents.create
     // does not, so a session here would stay in "ungrouped" even with the
@@ -282,6 +307,8 @@ export class HarnessDriver implements AgentDriver {
       }
     }
     const mode = modeOf(options.verbosity)
+    // 记录本轮发起者：tools.guard 据此决定是否对工具调用启用访客门禁。
+    if (options.actor !== undefined) this.turnActors.set(sessionId, options.actor)
     const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
     return await new Promise<string>((resolve, reject) => {
       let settleResolve!: () => void
@@ -323,6 +350,8 @@ export class HarnessDriver implements AgentDriver {
     if (inflight.ended) return
     inflight.ended = true
     if (record.inflight === inflight) record.inflight = undefined
+    // 轮次结束即恢复全量工具能力（下一轮若无 actor 记录则默认放行）。
+    this.turnActors.delete(record.agent.id)
     inflight.settleResolve()
     if (outcome.error !== undefined) {
       inflight.reject(outcome.error)

@@ -86,10 +86,27 @@ class FakeDriver implements AgentDriver {
 }
 
 class FakeStore {
-  rows = new Map<string, { sessionId: string; verbosity?: string; workspace?: string; targetId?: string }>()
+  rows = new Map<string, { sessionId: string; isMaster?: boolean; boundAt?: string; verbosity?: string; workspace?: string; targetId?: string }>()
   private key(ref: { kind: string; userId: string }): string { return `${ref.kind}:${ref.userId}` }
-  bind(ref: { kind: string; userId: string }, sessionId: string): void { this.rows.set(this.key(ref), { sessionId }) }
+  bind(ref: { kind: string; userId: string }, sessionId: string, isMaster?: boolean): void {
+    const existing = this.rows.get(this.key(ref))
+    if (existing !== undefined) {
+      existing.sessionId = sessionId
+      existing.boundAt = new Date().toISOString()
+      if (isMaster !== undefined) existing.isMaster = isMaster
+    } else {
+      this.rows.set(this.key(ref), { sessionId, boundAt: new Date().toISOString(), ...(isMaster ? { isMaster: true } : {}) })
+    }
+  }
   sessionIdFor(ref: { kind: string; userId: string }): string | undefined { return this.rows.get(this.key(ref))?.sessionId }
+  isMasterFor(ref: { kind: string; userId: string }): boolean { return this.rows.get(this.key(ref))?.isMaster === true }
+  ownerFor(kind: string): { userId: string; sessionId: string } | undefined {
+    const rows = [...this.rows.entries()]
+      .filter(([key, row]) => key.startsWith(`${kind}:`) && row.isMaster === true)
+      .sort(([, a], [, b]) => (a.boundAt ?? '').localeCompare(b.boundAt ?? ''))
+    const [key, row] = rows[0] ?? []
+    return key === undefined || row === undefined ? undefined : { userId: key.split(':')[1]!, sessionId: row.sessionId }
+  }
   unbind(ref: { kind: string; userId: string }): boolean { return this.rows.delete(this.key(ref)) }
   verbosityFor(ref: { kind: string; userId: string }): string | undefined { return this.rows.get(this.key(ref))?.verbosity }
   setVerbosity(ref: { kind: string; userId: string }, level: '简洁' | '标准' | '详细'): void {
@@ -131,9 +148,9 @@ async function makeRouter(options: { allow?: (from: { kind: string; userId: stri
   return { channel, driver, store, router, logs }
 }
 
-/** Bound user with a workspace picked — the steady-state chat path. */
+/** Channel owner with a workspace picked — the digital-avatar steady state. */
 function bindReady(h: Harness, userId = 'ou_user1'): void {
-  h.store.bind({ kind: 'feishu', userId }, 'session-1')
+  h.store.bind({ kind: 'feishu', userId }, 'session-1', true)
   h.driver.ownedIds.add('session-1')
   h.store.selectWorkspace({ kind: 'feishu', userId }, 'E:\\proj')
 }
@@ -159,19 +176,40 @@ describe('router.start', () => {
 })
 
 describe('router chat path', () => {
-  it('auto-creates a guest session for unbound users (no /bind required)', async () => {
+  it('asks for setup when the channel has no owner yet', async () => {
     const h = await makeRouter()
     h.channel.receive('你好')
     await settle()
-    // The guest path: one fresh session, the prompt runs with the visitor
-    // identity prefix, and the reply lands on a live sink.
-    expect(h.driver.started.length).toBe(1)
+    expect(h.channel.sent.length).toBe(1)
+    expect(h.channel.sent[0]?.text).toContain('/bind')
+    expect(h.channel.sent[0]?.text).toContain('尚未初始化')
+    expect(h.driver.promptCalls.length).toBe(0)
+  })
+
+  it('guests ride the owner avatar session with a guest actor tag', async () => {
+    const h = await makeRouter()
+    bindReady(h, 'ou_owner')
+    h.channel.receive('你好', 'ou_guest')
+    await settle()
+    // No guest session is created: the prompt lands on the owner's session
+    // with the visitor identity prefix and actor=guest for tool gating.
+    expect(h.driver.started.length).toBe(0)
     expect(h.driver.promptCalls.length).toBe(1)
+    expect(h.driver.promptCalls[0]?.sessionId).toBe('session-1')
     expect(h.driver.promptCalls[0]?.text).toContain('访客')
     expect(h.driver.promptCalls[0]?.text.endsWith('你好')).toBe(true)
-    expect(h.store.sessionIdFor({ kind: 'feishu', userId: 'ou_user1' })).toBe(h.driver.promptCalls[0]?.sessionId)
+    expect(h.driver.promptCalls[0]?.options?.actor).toBe('guest')
     const sink = h.channel.sinks[0]
     expect(sink?.finished).toEqual({ text: 'final reply', markdown: true })
+  })
+
+  it('owner prompts carry the owner actor tag', async () => {
+    const h = await makeRouter()
+    bindReady(h, 'ou_owner')
+    h.channel.receive('你好', 'ou_owner')
+    await settle()
+    expect(h.driver.promptCalls[0]?.text).toContain('主人')
+    expect(h.driver.promptCalls[0]?.options?.actor).toBe('owner')
   })
 
   it('streams live updates to the turn sink and finishes with markdown', async () => {
@@ -229,9 +267,9 @@ describe('router chat path', () => {
 })
 
 describe('router lazy session resume', () => {
-  it('re-attaches an unowned but persisted session before prompting', async () => {
+  it('re-attaches the owner avatar session before prompting', async () => {
     const h = await makeRouter()
-    h.store.bind({ kind: 'feishu', userId: 'ou_user1' }, 'session-9')
+    h.store.bind({ kind: 'feishu', userId: 'ou_user1' }, 'session-9', true)
     h.store.selectWorkspace({ kind: 'feishu', userId: 'ou_user1' }, 'E:\\proj')
     // session-9 is NOT in ownedIds: simulates a host restart.
     h.channel.receive('继续')
@@ -242,19 +280,19 @@ describe('router lazy session resume', () => {
     expect(h.driver.promptCalls[0]?.sessionId).toBe('session-9')
   })
 
-  it('creates a fresh session and continues when resume fails', async () => {
+  it('rebuilds the avatar for the owner when resume fails and guests follow', async () => {
     const h = await makeRouter()
-    h.store.bind({ kind: 'feishu', userId: 'ou_user1' }, 'session-9')
+    h.store.bind({ kind: 'feishu', userId: 'ou_user1' }, 'session-9', true)
     h.store.selectWorkspace({ kind: 'feishu', userId: 'ou_user1' }, 'E:\\proj')
     h.driver.resumeFails = true
-    h.channel.receive('继续')
+    h.channel.receive('继续', 'ou_guest')
     await settle()
-    // Resume was attempted; failing it must not strand the user — a new
-    // session is created, bound, and the prompt runs on it.
+    // Resume was attempted; failing it must not strand anyone — the owner's
+    // anchor is rebuilt and the guest's prompt runs on the fresh session.
     expect(h.driver.resumed.length).toBe(1)
     expect(h.driver.started.length).toBe(1)
     expect(h.driver.promptCalls.length).toBe(1)
-    expect(h.store.sessionIdFor({ kind: 'feishu', userId: 'ou_user1' })).toBe(h.driver.promptCalls[0]?.sessionId)
+    expect(h.store.ownerFor('feishu')?.sessionId).toBe(h.driver.promptCalls[0]?.sessionId)
     const sink = h.channel.sinks[0]
     expect(sink?.finished).toEqual({ text: 'final reply', markdown: true })
   })
@@ -280,5 +318,55 @@ describe('router verbosity → turn mode', () => {
     await settle()
     expect(h.channel.openModes).toEqual(['verbose'])
     expect(h.driver.promptCalls[0]?.options?.verbosity).toBe('详细')
+  })
+})
+
+describe('router command gating (digital avatar)', () => {
+  it('anyone can claim an unowned channel via /bind', async () => {
+    const h = await makeRouter()
+    h.channel.receive('/bind', 'ou_first')
+    await settle()
+    expect(h.driver.started.length).toBe(1)
+    expect(h.store.ownerFor('feishu')?.userId).toBe('ou_first')
+    expect(h.channel.sent.some(m => m.text.includes('认领成功'))).toBe(true)
+  })
+
+  it('a second /bind from another user is rejected', async () => {
+    const h = await makeRouter()
+    bindReady(h, 'ou_owner')
+    h.channel.receive('/bind', 'ou_other')
+    await settle()
+    expect(h.channel.sent.some(m => m.text.includes('已由 Owner 绑定'))).toBe(true)
+    expect(h.driver.started.length).toBe(0)
+    expect(h.store.ownerFor('feishu')?.userId).toBe('ou_owner')
+  })
+
+  it('guests cannot run management commands', async () => {
+    const h = await makeRouter()
+    bindReady(h, 'ou_owner')
+    for (const command of ['/项目', '/模型', '/思考', '/新建', '/unbind']) {
+      h.channel.receive(command, 'ou_guest')
+      await settle()
+    }
+    expect(h.driver.started.length).toBe(0)
+    expect(h.channel.sent.filter(m => m.text.includes('仅 Owner 可用')).length).toBe(5)
+  })
+
+  it('guests can run the default guest commands', async () => {
+    const h = await makeRouter()
+    bindReady(h, 'ou_owner')
+    h.channel.receive('/帮助', 'ou_guest')
+    await settle()
+    expect(h.channel.sent.some(m => m.text.includes('机器人命令'))).toBe(true)
+    h.channel.receive('/停止', 'ou_guest')
+    await settle()
+    expect(h.channel.sent.some(m => m.text.includes('没有正在执行的任务'))).toBe(true)
+  })
+
+  it('management commands hint setup on an unowned channel', async () => {
+    const h = await makeRouter()
+    h.channel.receive('/项目')
+    await settle()
+    expect(h.channel.sent.some(m => m.text.includes('尚未初始化'))).toBe(true)
   })
 })

@@ -3,6 +3,7 @@ import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-sett
 import z from '@deepseek-ai/schemastery'
 import { BindStore } from '../core/bind-store.ts'
 import { Router, type RouterStatus } from '../core/router.ts'
+import { DEFAULT_GUEST_COMMANDS } from '../core/guest-permissions.ts'
 import { HarnessDriver } from './driver.ts'
 import { WechatChannel, loadWechatCredentials } from '../channels/wechat/index.ts'
 import { FeishuChannel, loadFeishuCredentials } from '../channels/feishu/index.ts'
@@ -30,6 +31,10 @@ export interface ImChannelSection {
   commandPrefix: string
   /** Allowed IM user ids (or `kind:userId`); empty = everyone allowed. */
   allowlist: string[]
+  /** 访客可用的工具模式列表（精确名或前缀通配 `foo*`）；空 = 访客纯对话。 */
+  guestTools: string[]
+  /** 访客可用的命令（canonical id）；默认帮助/状态/回复/停止。 */
+  guestCommands: string[]
 }
 
 const KindUnion = z.union(['feishu', 'wechat', 'wecom'])
@@ -44,6 +49,8 @@ export const Config = z.object({
   channels: z.dict(InstanceSchema).default({}),
   commandPrefix: z.string().default('/'),
   allowlist: z.array(z.string()).default([]),
+  guestTools: z.array(z.string()).default([]),
+  guestCommands: z.array(z.string()).default([...DEFAULT_GUEST_COMMANDS]),
 }) as unknown as z<ImChannelSection>
 
 function isCredentialled(kind: ChannelKind): boolean {
@@ -82,7 +89,7 @@ export function apply(ctx: Context, config: ImChannelSection): void {
   for (const server of enabledServers) {
     mcpRegistry.registerServer({ name: server.name, url: server.url })
   }
-  const driver = new HarnessDriver(ctx, { mcpRegistry })
+  const driver = new HarnessDriver(ctx, { mcpRegistry, guestTools: () => current.guestTools ?? [] })
   // One bind store for the whole plugin lifetime (and process-shared with
   // the login HTTP API): the bound-session rows must survive router
   // rebuilds, and /bind hands out new sessions from it.
@@ -128,6 +135,7 @@ export function apply(ctx: Context, config: ImChannelSection): void {
           if (list === undefined || list.length === 0) return true
           return list.includes(from.userId) || list.includes(`${from.kind}:${from.userId}`)
         },
+        guestCommands: (): readonly string[] => current.guestCommands ?? DEFAULT_GUEST_COMMANDS,
         status: (): RouterStatus => {
           const selection = ctx.get('agentDefaultModel')
           if (selection !== undefined) {

@@ -64,7 +64,9 @@ im-channel 插件（外部包，经 dsh plugin --profile <p> add 安装）
 - 凭证文件 0600，目录 ~/.dsh/im-channel/
 - 可选用户白名单：settings `im-channel.allowlist`（userId 或 `kind:userId`），名单外的消息静默忽略（不暴露探测面）
 - 飞书群聊仅响应被 @ 的消息（mention 占位符会从文本中剥离）
-- 绑定：当前为「能发消息即可绑定」（依赖飞书自建应用可用范围/微信单聊边界做准入）；后续可恢复一次性口令
+- **数字分身与访客权限**：渠道内第一个 `/bind` 者为 Owner，其余用户为访客（共享 Owner 会话）
+  - 访客工具门禁：driver 在 agent setup 里注册 `agentCtx.tools.guard()`（单调、只能拒绝），访客发起的轮次中未命中 `im-channel.guestTools` 白名单（精确名/`前缀*`）的工具调用直接拒绝，拒绝文案面向模型，agent 会向访客解释；Owner 轮次不受影响
+  - 访客命令门禁：`im-channel.guestCommands`（默认 帮助/状态/回复/停止），管理命令（bind/项目/模型/思考/新建/unbind）仅 Owner
 - 工具审批：暂未实现（agent 使用 harness 默认权限策略）；规划接飞书卡片按钮回调做危险工具确认
   - 设计草案（见下文 § 工具审批）：hooks `ctx.on('session/event')` 监听 `tool/call`，命中危险名单时调 `ctx.approval.request({tool, reason, callId})`；通过 `approval/request` waterfall 监听器渲染飞书 / 微信卡，按钮回调用 `approval/decided` 决定 allow / deny
   - 依赖：peer dep `@deepseek-ai/dsh-user-approval >=0.1.0`（已加入 package.json；部署需保证 harness 暴露 `ctx.approval` 服务）

@@ -77,8 +77,31 @@ export class BindStore {
 
   /** Loaded rows (lazily read from disk once per process). */
   private rows(): Binding[] {
-    if (this.cache === undefined) this.cache = readStore().bindings
+    if (this.cache === undefined) {
+      this.cache = readStore().bindings
+      this.migrateLegacyOwners()
+    }
     return this.cache
+  }
+
+  /**
+   * One-time migration for rows created before the digital-avatar model: a
+   * channel whose only rows predate isMaster would look unowned and strand
+   * its users behind the setup hint. Promote the earliest binding of each
+   * ownerless channel to owner.
+   */
+  private migrateLegacyOwners(): void {
+    const kinds = new Set(this.cache?.map(row => row.kind) ?? [])
+    let changed = false
+    for (const kind of kinds) {
+      const rows = (this.cache ?? [])
+        .filter(row => row.kind === kind)
+        .sort((a, b) => a.boundAt.localeCompare(b.boundAt))
+      if (rows.some(row => row.isMaster === true) || rows.length === 0) continue
+      rows[0]!.isMaster = true
+      changed = true
+    }
+    if (changed) this.scheduleFlush()
   }
 
   private scheduleFlush(): void {
@@ -134,6 +157,18 @@ export class BindStore {
   /** 检查用户是否为主人（通过 /bind 绑定） */
   isMasterFor(ref: ImUserRef): boolean {
     return this.findRow(ref)?.isMaster === true
+  }
+
+  /**
+   * The channel owner (digital-avatar claimant): the first isMaster row of a
+   * channel kind. Everyone else on that channel is a guest riding the
+   * owner's session; undefined means the channel is uninitialized.
+   */
+  ownerFor(kind: ImUserRef['kind']): { userId: string; sessionId: string } | undefined {
+    const row = this.rows()
+      .filter(r => r.kind === kind && r.isMaster === true)
+      .sort((a, b) => a.boundAt.localeCompare(b.boundAt))[0]
+    return row === undefined ? undefined : { userId: row.userId, sessionId: row.sessionId }
   }
 
   /** Remove a binding. Returns true when a row was removed. */
