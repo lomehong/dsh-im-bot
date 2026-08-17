@@ -173,8 +173,14 @@ describe('HarnessDriver.resumeSession', () => {
 })
 
 describe('HarnessDriver.prompt', () => {
-  it('rejects with a binding-expired message when the session is unknown', async () => {
+  it('rejects with a binding-expired message when the session cannot be resurrected', async () => {
     const ctx = makeContext()
+    // The driver's recovery ladder: resume → recreate with the same id →
+    // reject. Make both rungs fail so the rejection path is exercised;
+    // with the default (succeeding) fakes the prompt would instead arm a
+    // normal turn that the test never settles.
+    ;(ctx.agents.resume as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('session gone'))
+    ;(ctx.agents.create as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('create failed'))
     const driver = new HarnessDriver(ctx as unknown as never)
     await expect(driver.prompt('session-gone', 'hi')).rejects.toThrow(/重新绑定/)
   })

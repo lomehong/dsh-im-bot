@@ -159,13 +159,19 @@ describe('router.start', () => {
 })
 
 describe('router chat path', () => {
-  it('answers unbound users with binding guidance', async () => {
+  it('auto-creates a guest session for unbound users (no /bind required)', async () => {
     const h = await makeRouter()
     h.channel.receive('你好')
     await settle()
-    expect(h.channel.sent.length).toBe(1)
-    expect(h.channel.sent[0]?.text).toContain('/bind')
-    expect(h.driver.promptCalls.length).toBe(0)
+    // The guest path: one fresh session, the prompt runs with the visitor
+    // identity prefix, and the reply lands on a live sink.
+    expect(h.driver.started.length).toBe(1)
+    expect(h.driver.promptCalls.length).toBe(1)
+    expect(h.driver.promptCalls[0]?.text).toContain('访客')
+    expect(h.driver.promptCalls[0]?.text.endsWith('你好')).toBe(true)
+    expect(h.store.sessionIdFor({ kind: 'feishu', userId: 'ou_user1' })).toBe(h.driver.promptCalls[0]?.sessionId)
+    const sink = h.channel.sinks[0]
+    expect(sink?.finished).toEqual({ text: 'final reply', markdown: true })
   })
 
   it('streams live updates to the turn sink and finishes with markdown', async () => {
@@ -236,15 +242,21 @@ describe('router lazy session resume', () => {
     expect(h.driver.promptCalls[0]?.sessionId).toBe('session-9')
   })
 
-  it('asks for a rebind when resume fails', async () => {
+  it('creates a fresh session and continues when resume fails', async () => {
     const h = await makeRouter()
     h.store.bind({ kind: 'feishu', userId: 'ou_user1' }, 'session-9')
     h.store.selectWorkspace({ kind: 'feishu', userId: 'ou_user1' }, 'E:\\proj')
     h.driver.resumeFails = true
     h.channel.receive('继续')
     await settle()
-    expect(h.driver.promptCalls.length).toBe(0)
-    expect(h.channel.sent.some(m => m.text.includes('/bind'))).toBe(true)
+    // Resume was attempted; failing it must not strand the user — a new
+    // session is created, bound, and the prompt runs on it.
+    expect(h.driver.resumed.length).toBe(1)
+    expect(h.driver.started.length).toBe(1)
+    expect(h.driver.promptCalls.length).toBe(1)
+    expect(h.store.sessionIdFor({ kind: 'feishu', userId: 'ou_user1' })).toBe(h.driver.promptCalls[0]?.sessionId)
+    const sink = h.channel.sinks[0]
+    expect(sink?.finished).toEqual({ text: 'final reply', markdown: true })
   })
 })
 
