@@ -11,18 +11,14 @@ import { McpClient, McpManager, type McpServerConfig } from './mcp-client.ts'
 /** 管理 MCP 工具注册 */
 export class WecomMcpRegistry {
   private readonly mcpManager = new McpManager()
-  private registered = false
 
   /** 注册 MCP 服务器配置 */
   registerServer(config: McpServerConfig): void {
     this.mcpManager.register(config)
   }
 
-  /** 将 MCP 工具注册到 agent 上下文 */
+  /** 将 MCP 工具注册到 agent 上下文（每个 agent 独立注册） */
   async registerToAgent(agentCtx: Context): Promise<void> {
-    if (this.registered) return
-    this.registered = true
-
     const clients = this.mcpManager.getAll()
     for (const client of clients) {
       try {

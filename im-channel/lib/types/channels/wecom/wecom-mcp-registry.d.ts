@@ -9,10 +9,9 @@ import { type McpServerConfig } from './mcp-client.ts';
 /** 管理 MCP 工具注册 */
 export declare class WecomMcpRegistry {
     private readonly mcpManager;
-    private registered;
     /** 注册 MCP 服务器配置 */
     registerServer(config: McpServerConfig): void;
-    /** 将 MCP 工具注册到 agent 上下文 */
+    /** 将 MCP 工具注册到 agent 上下文（每个 agent 独立注册） */
     registerToAgent(agentCtx: Context): Promise<void>;
     private log;
 }

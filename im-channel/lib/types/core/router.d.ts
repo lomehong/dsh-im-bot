@@ -33,6 +33,10 @@ export interface SessionOptions {
     provider?: string;
     model?: string;
     cwd?: string;
+    /** 当前用户 ID（用于共享记忆权限过滤） */
+    userId?: string;
+    /** 是否为绑定主人 */
+    isMaster?: boolean;
 }
 /** Status facts the /状态 command renders. */
 export interface RouterStatus {
@@ -144,6 +148,11 @@ export declare class Router {
      * stream the reply back, whether the actor is the owner or a guest.
      */
     private promptAvatarSession;
+    /**
+     * Prompt a guest session (resuming after host restart) and stream the reply.
+     * Each guest has their own independent session.
+     */
+    private promptSession;
     /** 处理已绑定的会话消息：发送到 agent 并回复 */
     private handleBoundMessage;
     /** Handle slash commands (Chinese primary, English aliases). */

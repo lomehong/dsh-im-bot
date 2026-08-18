@@ -104,7 +104,7 @@ export class HarnessDriver {
     async startSession(options = {}) {
         const cwd = normalizeCwd(options.cwd ?? this.options.cwd ?? process.cwd());
         const sessionId = SessionId(`session-${crypto.randomUUID()}`);
-        await this.createAgent(sessionId, cwd);
+        await this.createAgent(sessionId, cwd, options.userId, options.isMaster);
         this.ctx.logger?.info?.(`startSession ${sessionId.slice(0, 8)} cwd=${cwd} owned=${this.owned.size} (driver ${this.instanceId})`);
         return sessionId;
     }
@@ -118,7 +118,7 @@ export class HarnessDriver {
      * original cwd/meta come from persistence) and re-composes the agent
      * world through the same preset setup as create.
      */
-    async resumeSession(sessionId, _options = {}) {
+    async resumeSession(sessionId, options = {}) {
         if (this.owned.has(sessionId))
             return sessionId;
         const presets = this.ctx.get('agentPresets');
@@ -140,14 +140,18 @@ export class HarnessDriver {
                     await this.mcpRegistry.registerToAgent(agentCtx);
                 }
                 this.mountGuestGuard(agentCtx, sessionId);
+                // 注册共享记忆工具
+                this.mountSharedMemory(agentCtx, options.userId, options.isMaster);
             },
         });
         this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });
+        // 注入共享记忆摘要到 agent 上下文
+        this.injectMemoryContext(handle.agent, options.userId, options.isMaster);
         this.ctx.logger?.info?.(`resumeSession ${sessionId.slice(0, 15)}… owned=${this.owned.size} (driver ${this.instanceId})`);
         return sessionId;
     }
     /** Create (or resume) an agent with the gateway-equivalent composition. */
-    async createAgent(sessionId, cwd) {
+    async createAgent(sessionId, cwd, userId, isMaster) {
         const createOptions = {
             sessionId,
             meta: { cwd },
@@ -187,9 +191,13 @@ export class HarnessDriver {
                     await this.mcpRegistry.registerToAgent(agentCtx);
                 }
                 this.mountGuestGuard(agentCtx, createOptions.sessionId);
+                // 注入共享记忆（如果 dsh-memory 插件已加载）
+                this.mountSharedMemory(agentCtx, userId, isMaster);
             },
         });
         this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });
+        // 注入共享记忆摘要到 agent 上下文（让 agent 知道有记忆可以读取）
+        this.injectMemoryContext(handle.agent, userId, isMaster);
         await this.attachWorkspace(handle.agent.id, cwd);
     }
     /** Group the session under the workspace owning its cwd, when registered. */
@@ -226,6 +234,44 @@ export class HarnessDriver {
         }
         catch {
             // Path not resolvable or registry busy: session stays ungrouped.
+        }
+    }
+    /**
+     * 注入共享记忆服务（如果 dsh-memory 插件已加载）。
+     * 两个插件独立运行，这里通过 ctx.get 检查服务是否存在，不存在则静默跳过。
+     */
+    mountSharedMemory(agentCtx, userId, isMaster) {
+        const memoryService = this.ctx.get('dsh-memory');
+        if (memoryService === undefined)
+            return;
+        // 注册 memory_read / memory_write 工具
+        const uid = userId ?? 'unknown';
+        const master = isMaster ?? false;
+        memoryService.registerMemoryTools(agentCtx, uid, master);
+    }
+    /**
+     * 注入共享记忆摘要到 agent 的上下文，让 agent 知道有记忆可以读取。
+     * 使用 system 消息注入，在 agent 首次响应前提供记忆上下文。
+     */
+    injectMemoryContext(agent, userId, isMaster) {
+        const memoryService = this.ctx.get('dsh-memory');
+        if (memoryService === undefined)
+            return;
+        const uid = userId ?? 'unknown';
+        const master = isMaster ?? false;
+        const summary = memoryService.getMemorySummaryForUser(uid, master);
+        if (!summary)
+            return;
+        try {
+            const msg = createUserMessage({
+                content: [{ type: 'text', text: summary }],
+                source: { kind: 'plugin', plugin: 'dsh-memory' },
+            });
+            // inject 方法将消息注入到 agent 的上下文中，不唤醒驱动
+            agent.inject(msg);
+        }
+        catch {
+            // 注入失败时静默跳过，不影响正常流程
         }
     }
     /** Cancel the in-flight turn of a session; false when idle or unknown. */

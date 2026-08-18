@@ -5,7 +5,10 @@ export class Router {
     commandPrefix;
     /** Start a session honoring the user's stored workspace, if any. */
     startUserSession(from) {
-        const options = {};
+        const options = {
+            userId: from.userId,
+            isMaster: this.deps.store.isMasterFor?.(from) ?? false,
+        };
         const cwd = this.deps.store.workspaceFor?.(from);
         if (cwd !== undefined)
             options.cwd = cwd;
@@ -82,7 +85,8 @@ export class Router {
             return;
         }
         // 数字分身模型：渠道内第一个 /bind 的用户是 Owner，其会话是分身本体；
-        // 其他所有人都是访客，直接路由到 Owner 的会话，无需任何绑定操作。
+        // 其他所有人都是访客，每个访客拥有独立的会话，互不干扰。
+        // 所有会话共享记忆（通过 dsh-memory 插件）。
         const owner = this.deps.store.ownerFor?.(message.from.kind);
         if (owner === undefined) {
             await this.safeSend(channel, target, {
@@ -93,9 +97,16 @@ export class Router {
         const isOwner = owner.userId === message.from.userId;
         this.deps.store.rememberTarget?.(message.from, target.targetId);
         if (!isOwner) {
-            // 访客行只承载个人偏好（回复详细度等）；路由永远走 Owner 的最新会话。
-            this.deps.store.bind(message.from, owner.sessionId, false);
-            this.log(`[im-channel] 访客 ${message.from.userId.slice(0, 12)}… 进入分身会话 ${owner.sessionId.slice(0, 8)}…`);
+            // 访客独立会话模型：每个访客拥有自己的会话，不共享会话上下文
+            let guestSessionId = this.deps.store.sessionIdFor(message.from);
+            if (guestSessionId === undefined) {
+                // 首次对话，创建新会话
+                guestSessionId = await this.startUserSession(message.from);
+                this.deps.store.bind(message.from, guestSessionId, false);
+                this.log(`[im-channel] 访客 ${message.from.userId.slice(0, 12)}… 创建独立会话 ${guestSessionId.slice(0, 8)}…`);
+            }
+            await this.promptSession(channel, target, message, guestSessionId, false, message.from.userId);
+            return;
         }
         await this.promptAvatarSession(channel, target, message, owner, isOwner);
     }
@@ -111,7 +122,10 @@ export class Router {
             const ownerRef = { kind: message.from.kind, userId: owner.userId };
             const cwd = this.deps.store.workspaceFor?.(ownerRef);
             try {
-                await this.deps.driver.resumeSession?.(sessionId, cwd === undefined ? {} : { cwd });
+                const resumeOpts = { userId: owner.userId, isMaster: true };
+                if (cwd !== undefined)
+                    resumeOpts.cwd = cwd;
+                await this.deps.driver.resumeSession?.(sessionId, resumeOpts);
                 this.log(`[im-channel] 分身会话 ${sessionId.slice(0, 8)}… 重连成功`);
             }
             catch (error) {
@@ -124,6 +138,26 @@ export class Router {
             }
         }
         await this.handleBoundMessage(channel, target, message, sessionId, isOwner);
+    }
+    /**
+     * Prompt a guest session (resuming after host restart) and stream the reply.
+     * Each guest has their own independent session.
+     */
+    async promptSession(channel, target, message, sessionId, _isMaster, userId) {
+        // Resume session after host restart
+        if (this.deps.driver.has !== undefined && !this.deps.driver.has(sessionId)) {
+            try {
+                await this.deps.driver.resumeSession?.(sessionId, { userId, isMaster: false });
+                this.log(`[im-channel] 访客会话 ${sessionId.slice(0, 8)}… 重连成功`);
+            }
+            catch (error) {
+                this.log(`[im-channel] 访客会话 ${sessionId.slice(0, 8)}… 重连失败，重建: ${messageOf(error)}`);
+                const newSessionId = await this.startUserSession(message.from);
+                this.deps.store.bind(message.from, newSessionId, false);
+                sessionId = newSessionId;
+            }
+        }
+        await this.handleBoundMessage(channel, target, message, sessionId, false);
     }
     /** 处理已绑定的会话消息：发送到 agent 并回复 */
     async handleBoundMessage(channel, target, message, sessionId, isMaster = false) {
@@ -181,9 +215,10 @@ export class Router {
                 await this.safeSend(channel, target, { text: '🔒 该命令仅 Owner 可用。发送 /帮助 查看可用命令。' });
                 return;
             }
-            // 访客偏好行（/回复 详细度等）随用随建，不拥有会话。
+            // 访客命令：使用访客自己的独立会话
             if (this.deps.store.sessionIdFor(message.from) === undefined) {
-                this.deps.store.bind(message.from, owner.sessionId, false);
+                const guestSessionId = await this.startUserSession(message.from);
+                this.deps.store.bind(message.from, guestSessionId, false);
                 this.deps.store.rememberTarget?.(message.from, target.targetId);
             }
         }
@@ -216,6 +251,7 @@ export class Router {
                     return;
                 }
                 const facts = this.deps.status?.();
+                const sessionId = this.deps.store.sessionIdFor(message.from) ?? avatar.sessionId;
                 const lines = ['📊 当前状态', '──────────────────'];
                 if (facts !== undefined) {
                     lines.push(`工作区：${facts.cwd}`);
@@ -223,7 +259,7 @@ export class Router {
                     if (facts.reasoningEffort !== undefined)
                         lines.push(`思考：${facts.reasoningEffort}`);
                 }
-                lines.push(`分身会话：${avatar.sessionId.slice(0, 8)}…`);
+                lines.push(`会话：${sessionId.slice(0, 8)}…`);
                 lines.push(`你的身份：${avatar.userId === message.from.userId ? 'Owner' : '访客'}`);
                 await this.safeSend(channel, target, { text: lines.join('\n') });
                 return;

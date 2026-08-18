@@ -2,16 +2,12 @@ import { McpManager } from "./mcp-client.js";
 /** 管理 MCP 工具注册 */
 export class WecomMcpRegistry {
     mcpManager = new McpManager();
-    registered = false;
     /** 注册 MCP 服务器配置 */
     registerServer(config) {
         this.mcpManager.register(config);
     }
-    /** 将 MCP 工具注册到 agent 上下文 */
+    /** 将 MCP 工具注册到 agent 上下文（每个 agent 独立注册） */
     async registerToAgent(agentCtx) {
-        if (this.registered)
-            return;
-        this.registered = true;
         const clients = this.mcpManager.getAll();
         for (const client of clients) {
             try {

@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { AgentOptions } from '@deepseek-ai/dsh-agent';
-import type { AgentDriver, PromptOptions } from '../core/router.ts';
+import type { AgentDriver, PromptOptions, SessionOptions } from '../core/router.ts';
 import type { WecomMcpRegistry } from '../channels/wecom/wecom-mcp-registry.ts';
 /**
  * AgentDriver over the in-process harness services: one agent per bound IM
@@ -28,9 +28,7 @@ export declare class HarnessDriver implements AgentDriver {
         mcpRegistry?: WecomMcpRegistry;
         guestTools?: () => readonly string[];
     });
-    startSession(options?: {
-        cwd?: string;
-    }): Promise<string>;
+    startSession(options?: SessionOptions): Promise<string>;
     /** Whether this driver currently owns a live agent for the session id. */
     has(sessionId: string): boolean;
     /**
@@ -39,9 +37,7 @@ export declare class HarnessDriver implements AgentDriver {
      * original cwd/meta come from persistence) and re-composes the agent
      * world through the same preset setup as create.
      */
-    resumeSession(sessionId: string, _options?: {
-        cwd?: string;
-    }): Promise<string>;
+    resumeSession(sessionId: string, options?: SessionOptions): Promise<string>;
     /** Create (or resume) an agent with the gateway-equivalent composition. */
     private createAgent;
     /** Group the session under the workspace owning its cwd, when registered. */
@@ -54,6 +50,16 @@ export declare class HarnessDriver implements AgentDriver {
      */
     private mountGuestGuard;
     private attachWorkspace;
+    /**
+     * 注入共享记忆服务（如果 dsh-memory 插件已加载）。
+     * 两个插件独立运行，这里通过 ctx.get 检查服务是否存在，不存在则静默跳过。
+     */
+    private mountSharedMemory;
+    /**
+     * 注入共享记忆摘要到 agent 的上下文，让 agent 知道有记忆可以读取。
+     * 使用 system 消息注入，在 agent 首次响应前提供记忆上下文。
+     */
+    private injectMemoryContext;
     /** Cancel the in-flight turn of a session; false when idle or unknown. */
     cancel(sessionId: string): boolean;
     prompt(sessionId: string, text: string, options?: PromptOptions): Promise<string>;

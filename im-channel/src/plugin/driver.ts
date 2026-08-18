@@ -3,7 +3,7 @@ import { isAbsolute, resolve } from 'node:path'
 import type { Agent, AgentOptions, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
-import type { AgentDriver, PromptOptions } from '../core/router.ts'
+import type { AgentDriver, PromptOptions, SessionOptions } from '../core/router.ts'
 import { interruptedNote, modeOf, renderFinal, renderLive, type VerbosityMode } from '../core/render.ts'
 import { guestToolDenied, matchesToolPattern } from '../core/guest-permissions.ts'
 import type { WecomMcpRegistry } from '../channels/wecom/wecom-mcp-registry.ts'
@@ -131,10 +131,10 @@ export class HarnessDriver implements AgentDriver {
     })
   }
 
-  async startSession(options: { cwd?: string } = {}): Promise<string> {
+  async startSession(options: SessionOptions = {}): Promise<string> {
     const cwd = normalizeCwd(options.cwd ?? this.options.cwd ?? process.cwd())
     const sessionId = SessionId(`session-${crypto.randomUUID()}`)
-    await this.createAgent(sessionId, cwd)
+    await this.createAgent(sessionId, cwd, options.userId, options.isMaster)
     this.ctx.logger?.info?.(`startSession ${sessionId.slice(0, 8)} cwd=${cwd} owned=${this.owned.size} (driver ${this.instanceId})`)
     return sessionId
   }
@@ -150,7 +150,7 @@ export class HarnessDriver implements AgentDriver {
    * original cwd/meta come from persistence) and re-composes the agent
    * world through the same preset setup as create.
    */
-  async resumeSession(sessionId: string, _options: { cwd?: string } = {}): Promise<string> {
+  async resumeSession(sessionId: string, options: SessionOptions = {}): Promise<string> {
     if (this.owned.has(sessionId)) return sessionId
     const presets = this.ctx.get('agentPresets')
     // Same direct-creation caveat as startSession: spell the model route out
@@ -170,15 +170,24 @@ export class HarnessDriver implements AgentDriver {
           await this.mcpRegistry.registerToAgent(agentCtx)
         }
         this.mountGuestGuard(agentCtx, sessionId)
+        // 注册共享记忆工具
+        this.mountSharedMemory(agentCtx, options.userId, options.isMaster)
       },
     })
     this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined })
+    // 注入共享记忆摘要到 agent 上下文
+    this.injectMemoryContext(handle.agent, options.userId, options.isMaster)
     this.ctx.logger?.info?.(`resumeSession ${sessionId.slice(0, 15)}… owned=${this.owned.size} (driver ${this.instanceId})`)
     return sessionId
   }
 
   /** Create (or resume) an agent with the gateway-equivalent composition. */
-  private async createAgent(sessionId: ReturnType<typeof SessionId>, cwd: string): Promise<void> {
+  private async createAgent(
+    sessionId: ReturnType<typeof SessionId>,
+    cwd: string,
+    userId?: string,
+    isMaster?: boolean,
+  ): Promise<void> {
     const createOptions: { sessionId: ReturnType<typeof SessionId>; meta: { cwd: string }; agentOptions?: AgentOptions } = {
       sessionId,
       meta: { cwd },
@@ -216,9 +225,13 @@ export class HarnessDriver implements AgentDriver {
           await this.mcpRegistry.registerToAgent(agentCtx)
         }
         this.mountGuestGuard(agentCtx, createOptions.sessionId)
+        // 注入共享记忆（如果 dsh-memory 插件已加载）
+        this.mountSharedMemory(agentCtx, userId, isMaster)
       },
     })
     this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined })
+    // 注入共享记忆摘要到 agent 上下文（让 agent 知道有记忆可以读取）
+    this.injectMemoryContext(handle.agent, userId, isMaster)
     await this.attachWorkspace(handle.agent.id, cwd)
   }
 
@@ -253,6 +266,49 @@ export class HarnessDriver implements AgentDriver {
       if (workspace !== undefined) await workspace.attachSession(sessionId)
     } catch {
       // Path not resolvable or registry busy: session stays ungrouped.
+    }
+  }
+
+  /**
+   * 注入共享记忆服务（如果 dsh-memory 插件已加载）。
+   * 两个插件独立运行，这里通过 ctx.get 检查服务是否存在，不存在则静默跳过。
+   */
+  private mountSharedMemory(agentCtx: unknown, userId?: string, isMaster?: boolean): void {
+    const memoryService = this.ctx.get('dsh-memory') as
+      | { registerMemoryTools: (ctx: unknown, userId: string, isMaster: boolean) => void }
+      | undefined
+    if (memoryService === undefined) return
+
+    // 注册 memory_read / memory_write 工具
+    const uid = userId ?? 'unknown'
+    const master = isMaster ?? false
+    memoryService.registerMemoryTools(agentCtx, uid, master)
+  }
+
+  /**
+   * 注入共享记忆摘要到 agent 的上下文，让 agent 知道有记忆可以读取。
+   * 使用 system 消息注入，在 agent 首次响应前提供记忆上下文。
+   */
+  private injectMemoryContext(agent: Agent, userId?: string, isMaster?: boolean): void {
+    const memoryService = this.ctx.get('dsh-memory') as
+      | { getMemorySummaryForUser: (userId: string, isMaster: boolean) => string }
+      | undefined
+    if (memoryService === undefined) return
+
+    const uid = userId ?? 'unknown'
+    const master = isMaster ?? false
+    const summary = memoryService.getMemorySummaryForUser(uid, master)
+    if (!summary) return
+
+    try {
+      const msg = createUserMessage({
+        content: [{ type: 'text', text: summary }],
+        source: { kind: 'plugin', plugin: 'dsh-memory' },
+      })
+      // inject 方法将消息注入到 agent 的上下文中，不唤醒驱动
+      agent.inject(msg)
+    } catch {
+      // 注入失败时静默跳过，不影响正常流程
     }
   }
 
