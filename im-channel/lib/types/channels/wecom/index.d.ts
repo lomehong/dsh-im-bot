@@ -32,6 +32,8 @@ export declare class WecomChannel implements ImChannel {
     private readonly options;
     readonly kind: "wecom";
     readonly label = "\u4F01\u4E1A\u5FAE\u4FE1";
+    /** 当前活跃实例，供 LoginApi 更改凭证后触发重连 */
+    static activeInstance: WecomChannel | undefined;
     private handler;
     private client;
     /** 最近收到的消息帧，按 reqId 索引，用于 replyStream 回传 */
@@ -49,6 +51,8 @@ export declare class WecomChannel implements ImChannel {
     private log;
     isConfigured(): boolean;
     connect(): Promise<void>;
+    /** 使用最新凭证重新连接（凭证文件已更新后调用） */
+    reconnect(): Promise<void>;
     onMessage(handler: (message: InboundMessage) => void): void;
     onDead(handler: (reason: string) => void): void;
     private reportDead;

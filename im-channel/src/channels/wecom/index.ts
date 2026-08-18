@@ -91,6 +91,9 @@ export class WecomChannel implements ImChannel {
   readonly kind = 'wecom' as const
   readonly label = '企业微信'
 
+  /** 当前活跃实例，供 LoginApi 更改凭证后触发重连 */
+  static activeInstance: WecomChannel | undefined
+
   private handler: ((message: InboundMessage) => void) | undefined
   private client: WSClient | undefined
   /** 最近收到的消息帧，按 reqId 索引，用于 replyStream 回传 */
@@ -185,6 +188,21 @@ export class WecomChannel implements ImChannel {
     })
 
     this.client.connect()
+    WecomChannel.activeInstance = this
+  }
+
+  /** 使用最新凭证重新连接（凭证文件已更新后调用） */
+  async reconnect(): Promise<void> {
+    this.log('wecom 凭证已更新，正在重新连接...')
+    // 断开旧连接（如果有）
+    this.client?.disconnect()
+    this.client = undefined
+    // 清理状态
+    this.recentFrames.clear()
+    this.latestReqId.clear()
+    this.seenMessageIds.clear()
+    // 重新连接（connect() 会从文件读取最新凭证）
+    await this.connect()
   }
 
   onMessage(handler: (message: InboundMessage) => void): void {

@@ -204,6 +204,14 @@ export class LoginApi {
       await configureWecomBot(body.botId, body.secret)
       // 自动创建通道实例
       await this.ensureChannelInstance('wecom')
+      // 触发重连，让新凭证立即生效
+      try {
+        const { WecomChannel } = await import('../channels/wecom/index.ts')
+        await WecomChannel.activeInstance?.reconnect()
+      } catch (e) {
+        // 重连失败不影响凭证保存
+        this.ctx.logger.warn(`im-channel: 企业微信重连失败: ${messageOf(e)}`)
+      }
       // 如果当前有登录会话，标记为已确认
       if (this.session !== undefined && this.session.kind === 'wecom') {
         this.session.status = 'confirmed'
