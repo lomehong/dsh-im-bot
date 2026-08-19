@@ -337,15 +337,15 @@ class WecomTurnSink {
                 this.log(`wecom 流式回复完成: ${final.text.length} chars`);
             }
             else {
-                // 非流式降级：一次性发送完整内容
+                // 非流式降级：只发送未推送过的增量，避免与流式期间已发的批次重复
                 const delta = final.text.startsWith(this.lastSent) ? final.text.slice(this.lastSent.length) : final.text;
                 if (delta.trim().length > 0) {
                     await this.client.sendMessage(this.target.targetId, {
                         msgtype: 'markdown',
-                        markdown: { content: final.text },
+                        markdown: { content: delta },
                     });
                 }
-                this.log(`wecom 非流式回复完成: ${final.text.length} chars`);
+                this.log(`wecom 非流式回复完成: ${final.text.length} chars (delta ${delta.length})`);
             }
             this.lastSent = final.text;
         }

@@ -27,6 +27,10 @@ export interface PromptOptions {
     onUpdate?(view: string): void;
     /** Who initiated the turn: the channel owner or a guest (drives tool gating). */
     actor?: 'owner' | 'guest';
+    /** 当前用户 ID（重启恢复/兜底重建会话时用于记忆权限过滤）。 */
+    userId?: string;
+    /** 是否为绑定主人（重启恢复/兜底重建会话时用于记忆权限过滤）。 */
+    isMaster?: boolean;
 }
 /** Per-session knobs a /新建 or /bind session can carry. */
 export interface SessionOptions {
@@ -124,6 +128,8 @@ export interface BindStoreLike {
     workspaceFor?(ref: InboundMessage['from']): string | undefined;
     /** Remember where to reach the user for proactive sends; optional. */
     rememberTarget?(ref: InboundMessage['from'], targetId: string): void;
+    /** The user's last known chat target for proactive sends; optional. */
+    targetIdFor?(ref: InboundMessage['from']): string | undefined;
 }
 export declare class Router {
     private readonly deps;
@@ -139,6 +145,15 @@ export declare class Router {
     stop(): Promise<void>;
     /** channel.send that can never reject into an unhandled rejection. */
     private safeSend;
+    /**
+     * 主动向某个渠道用户推送一条消息（不等用户输入）。
+     * 用于：其他通道（如御驿/yuyi）收到的重要消息转推给 Owner；
+     * agent 主动汇报等场景。用户须已绑定且记录过 lastTargetId。
+     * 返回是否成功投递；目标不可达时返回 false（不抛错）。
+     */
+    pushToUser(kind: InboundMessage['from']['kind'], userId: string, text: string, options?: {
+        markdown?: boolean;
+    }): Promise<boolean>;
     /** Open a live turn sink, falling back to send-on-final when unsupported. */
     private openSink;
     /** Route one inbound message: commands first, then bound-session chat. */

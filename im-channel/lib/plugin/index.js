@@ -12,6 +12,7 @@ import { getEnabledMcpServers } from "../channels/mcp-server-manager.js";
 import { LoginApi } from "./login-api.js";
 export const name = 'im-channel';
 export const inject = ['agents'];
+export const provide = ['im-channel'];
 const NS = settingsNamespace('im-channel');
 const KindUnion = z.union(['feishu', 'wechat', 'wecom']);
 const InstanceSchema = z.object({
@@ -50,6 +51,18 @@ export function apply(ctx, config) {
     let current = config;
     let router;
     let disposeRouter;
+    ctx.provide('im-channel', {
+        /**
+         * 主动推送一条消息给指定渠道用户（须已绑定且记录过 lastTargetId）。
+         * @returns 是否成功投递
+         */
+        pushToUser: (kind, userId, text, options) => {
+            const r = router;
+            if (r === undefined)
+                return Promise.resolve(false);
+            return r.pushToUser(kind, userId, text, options);
+        },
+    });
     // One driver for the whole plugin lifetime: router rebuilds (settings
     // edits, instance reconciliation) must not orphan bound sessions — the
     // driver's owned-session map is what /bind hands out.

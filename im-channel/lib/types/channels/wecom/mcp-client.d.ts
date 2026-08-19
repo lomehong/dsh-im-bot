@@ -31,6 +31,7 @@ export declare class McpClient {
     private static readonly CACHE_TTL_MS;
     constructor(config: McpServerConfig);
     get name(): string;
+    get serverUrl(): string;
     /** 发送 JSON-RPC 请求 */
     private request;
     /** 获取工具列表（带缓存） */
@@ -41,7 +42,7 @@ export declare class McpClient {
 /** 管理多个 MCP 客户端 */
 export declare class McpManager {
     private readonly clients;
-    /** 注册一个 MCP 服务器 */
+    /** 注册一个 MCP 服务器；同名但 URL 变化时替换为新客户端。 */
     register(config: McpServerConfig): McpClient;
     /** 获取所有已注册的客户端 */
     getAll(): McpClient[];

@@ -25,6 +25,9 @@ export class McpClient {
     get name() {
         return this.serverName;
     }
+    get serverUrl() {
+        return this.url;
+    }
     /** 发送 JSON-RPC 请求 */
     async request(method, params) {
         const id = this.requestId++;
@@ -78,10 +81,10 @@ export class McpClient {
 /** 管理多个 MCP 客户端 */
 export class McpManager {
     clients = new Map();
-    /** 注册一个 MCP 服务器 */
+    /** 注册一个 MCP 服务器；同名但 URL 变化时替换为新客户端。 */
     register(config) {
         const existing = this.clients.get(config.name);
-        if (existing !== undefined)
+        if (existing !== undefined && existing.serverUrl === config.url)
             return existing;
         const client = new McpClient(config);
         this.clients.set(config.name, client);

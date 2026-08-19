@@ -57,6 +57,27 @@ export class Router {
             this.log(`[im-channel] ${channel.label} 发送到 ${target.targetId.slice(0, 12)}… 失败: ${messageOf(error)}`);
         }
     }
+    /**
+     * 主动向某个渠道用户推送一条消息（不等用户输入）。
+     * 用于：其他通道（如御驿/yuyi）收到的重要消息转推给 Owner；
+     * agent 主动汇报等场景。用户须已绑定且记录过 lastTargetId。
+     * 返回是否成功投递；目标不可达时返回 false（不抛错）。
+     */
+    async pushToUser(kind, userId, text, options = {}) {
+        const channel = this.deps.channels.find(c => c.kind === kind);
+        if (channel === undefined) {
+            this.log(`[im-channel] pushToUser: 渠道 ${kind} 未连接，跳过推送`);
+            return false;
+        }
+        const ref = { kind, userId: userId };
+        const targetId = this.deps.store.targetIdFor?.(ref);
+        if (targetId === undefined) {
+            this.log(`[im-channel] pushToUser: ${kind}:${userId.slice(0, 12)}… 无 lastTargetId，无法主动推送`);
+            return false;
+        }
+        await this.safeSend(channel, { kind, targetId }, { text, markdown: options.markdown ?? true });
+        return true;
+    }
     /** Open a live turn sink, falling back to send-on-final when unsupported. */
     async openSink(channel, target, mode) {
         if (channel.openTurn !== undefined) {
@@ -76,39 +97,47 @@ export class Router {
     /** Route one inbound message: commands first, then bound-session chat. */
     async routeMessage(channel, message) {
         const target = { kind: channel.kind, targetId: message.chatId ?? message.from.userId };
-        if (this.deps.allowed !== undefined && !this.deps.allowed(message.from)) {
-            this.log(`[im-channel] ${channel.label} 拒绝未授权用户 ${message.from.userId.slice(0, 12)}…`);
-            return;
-        }
-        if (message.text.startsWith(this.commandPrefix)) {
-            await this.runCommand(channel, target, message);
-            return;
-        }
-        // 数字分身模型：渠道内第一个 /bind 的用户是 Owner，其会话是分身本体；
-        // 其他所有人都是访客，每个访客拥有独立的会话，互不干扰。
-        // 所有会话共享记忆（通过 dsh-memory 插件）。
-        const owner = this.deps.store.ownerFor?.(message.from.kind);
-        if (owner === undefined) {
-            await this.safeSend(channel, target, {
-                text: '🤖 机器人尚未初始化。请 Owner 发送 /bind 认领并选择工作区；认领后所有人即可直接对话。',
-            });
-            return;
-        }
-        const isOwner = owner.userId === message.from.userId;
-        this.deps.store.rememberTarget?.(message.from, target.targetId);
-        if (!isOwner) {
-            // 访客独立会话模型：每个访客拥有自己的会话，不共享会话上下文
-            let guestSessionId = this.deps.store.sessionIdFor(message.from);
-            if (guestSessionId === undefined) {
-                // 首次对话，创建新会话
-                guestSessionId = await this.startUserSession(message.from);
-                this.deps.store.bind(message.from, guestSessionId, false);
-                this.log(`[im-channel] 访客 ${message.from.userId.slice(0, 12)}… 创建独立会话 ${guestSessionId.slice(0, 8)}…`);
+        try {
+            if (this.deps.allowed !== undefined && !this.deps.allowed(message.from)) {
+                this.log(`[im-channel] ${channel.label} 拒绝未授权用户 ${message.from.userId.slice(0, 12)}…`);
+                return;
             }
-            await this.promptSession(channel, target, message, guestSessionId, false, message.from.userId);
-            return;
+            if (message.text.startsWith(this.commandPrefix)) {
+                await this.runCommand(channel, target, message);
+                return;
+            }
+            // 数字分身模型：渠道内第一个 /bind 的用户是 Owner，其会话是分身本体；
+            // 其他所有人都是访客，每个访客拥有独立的会话，互不干扰。
+            // 所有会话共享记忆（通过 dsh-memory 插件）。
+            const owner = this.deps.store.ownerFor?.(message.from.kind);
+            if (owner === undefined) {
+                await this.safeSend(channel, target, {
+                    text: '🤖 机器人尚未初始化。请 Owner 发送 /bind 认领并选择工作区；认领后所有人即可直接对话。',
+                });
+                return;
+            }
+            const isOwner = owner.userId === message.from.userId;
+            this.deps.store.rememberTarget?.(message.from, target.targetId);
+            if (!isOwner) {
+                // 访客独立会话模型：每个访客拥有自己的会话，不共享会话上下文
+                let guestSessionId = this.deps.store.sessionIdFor(message.from);
+                if (guestSessionId === undefined) {
+                    // 首次对话，创建新会话
+                    guestSessionId = await this.startUserSession(message.from);
+                    this.deps.store.bind(message.from, guestSessionId, false);
+                    this.log(`[im-channel] 访客 ${message.from.userId.slice(0, 12)}… 创建独立会话 ${guestSessionId.slice(0, 8)}…`);
+                }
+                await this.promptSession(channel, target, message, guestSessionId, false, message.from.userId);
+                return;
+            }
+            await this.promptAvatarSession(channel, target, message, owner, isOwner);
         }
-        await this.promptAvatarSession(channel, target, message, owner, isOwner);
+        catch (error) {
+            // 顶层兜底：会话创建/路由失败不得变成 unhandled rejection，
+            // 也尽量给用户一个可理解的提示而不是静默吞掉。
+            this.log(`[im-channel] ${channel.label} 处理消息失败: ${messageOf(error)}`);
+            await this.safeSend(channel, target, { text: `⚠️ 处理消息时出错：${messageOf(error)}` }).catch(() => { });
+        }
     }
     /**
      * Prompt the owner's avatar session (resuming it after host restarts) and
@@ -164,7 +193,7 @@ export class Router {
         const verbosity = this.deps.store.verbosityFor?.(message.from);
         const sink = await this.openSink(channel, target, modeOf(verbosity));
         try {
-            const promptOptions = { actor: isMaster ? 'owner' : 'guest' };
+            const promptOptions = { actor: isMaster ? 'owner' : 'guest', userId: message.from.userId, isMaster };
             if (verbosity !== undefined)
                 promptOptions.verbosity = verbosity;
             promptOptions.onUpdate = view => sink.update(view);
@@ -307,13 +336,15 @@ export class Router {
                 return;
             }
             case 'stop': {
-                // 停止的是分身会话（Owner 的会话）；谁按停都一样。
+                // 访客独立会话模型下，谁按停就停谁的会话：
+                // 访客停自己的独立会话，Owner 停分身会话。
                 const avatar = this.deps.store.ownerFor?.(message.from.kind);
                 if (avatar === undefined) {
                     await this.safeSend(channel, target, { text: '机器人尚未初始化。请 Owner 发送 /bind 认领。' });
                     return;
                 }
-                const stopped = this.deps.cancel?.(avatar.sessionId) ?? false;
+                const sessionId = this.deps.store.sessionIdFor(message.from) ?? avatar.sessionId;
+                const stopped = this.deps.cancel?.(sessionId) ?? false;
                 await this.safeSend(channel, target, { text: stopped ? '⏹ 已停止当前任务。' : '当前没有正在执行的任务。' });
                 return;
             }

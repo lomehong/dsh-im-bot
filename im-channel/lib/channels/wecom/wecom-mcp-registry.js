@@ -1,3 +1,4 @@
+import { getEnabledMcpServers } from "../mcp-server-manager.js";
 import { McpManager } from "./mcp-client.js";
 /** 管理 MCP 工具注册 */
 export class WecomMcpRegistry {
@@ -6,8 +7,19 @@ export class WecomMcpRegistry {
     registerServer(config) {
         this.mcpManager.register(config);
     }
+    /**
+     * 从通用 MCP 服务器管理文件（mcp-servers.json）同步已启用的服务器。
+     * 设置页新增/修改/删除服务器后无需重启即可在下一个 agent 会话生效。
+     */
+    syncFromServerFile() {
+        for (const server of getEnabledMcpServers()) {
+            this.mcpManager.register({ name: server.name, url: server.url });
+        }
+    }
     /** 将 MCP 工具注册到 agent 上下文（每个 agent 独立注册） */
     async registerToAgent(agentCtx) {
+        // 每次 agent 建立时同步最新服务器配置，避免设置页改动要重启才生效
+        this.syncFromServerFile();
         const clients = this.mcpManager.getAll();
         for (const client of clients) {
             try {

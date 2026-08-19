@@ -186,14 +186,14 @@ describe('router chat path', () => {
     expect(h.driver.promptCalls.length).toBe(0)
   })
 
-  it('guests ride the owner avatar session with a guest actor tag', async () => {
+  it('guests get their own independent session with a guest actor tag', async () => {
     const h = await makeRouter()
     bindReady(h, 'ou_owner')
     h.channel.receive('你好', 'ou_guest')
     await settle()
-    // No guest session is created: the prompt lands on the owner's session
-    // with the visitor identity prefix and actor=guest for tool gating.
-    expect(h.driver.started.length).toBe(0)
+    // 访客独立会话模型：首次对话为访客创建独立会话（不共享 Owner 会话），
+    // 消息带访客身份前缀，actor=guest 用于工具门禁。
+    expect(h.driver.started.length).toBe(1)
     expect(h.driver.promptCalls.length).toBe(1)
     expect(h.driver.promptCalls[0]?.sessionId).toBe('session-1')
     expect(h.driver.promptCalls[0]?.text).toContain('访客')
@@ -280,15 +280,15 @@ describe('router lazy session resume', () => {
     expect(h.driver.promptCalls[0]?.sessionId).toBe('session-9')
   })
 
-  it('rebuilds the avatar for the owner when resume fails and guests follow', async () => {
+  it('rebuilds the avatar for the owner when resume fails', async () => {
     const h = await makeRouter()
     h.store.bind({ kind: 'feishu', userId: 'ou_user1' }, 'session-9', true)
     h.store.selectWorkspace({ kind: 'feishu', userId: 'ou_user1' }, 'E:\\proj')
     h.driver.resumeFails = true
-    h.channel.receive('继续', 'ou_guest')
+    // session-9 不在 ownedIds：模拟重启后 Owner 第一次对话。
+    h.channel.receive('继续', 'ou_user1')
     await settle()
-    // Resume was attempted; failing it must not strand anyone — the owner's
-    // anchor is rebuilt and the guest's prompt runs on the fresh session.
+    // Resume 被尝试但失败；Owner 锚点重建到新会话，prompt 落在新会话上。
     expect(h.driver.resumed.length).toBe(1)
     expect(h.driver.started.length).toBe(1)
     expect(h.driver.promptCalls.length).toBe(1)

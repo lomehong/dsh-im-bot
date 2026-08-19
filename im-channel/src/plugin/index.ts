@@ -15,6 +15,7 @@ import type { ChannelKind, ImChannel } from '../core/channel.ts'
 
 export const name = 'im-channel'
 export const inject = ['agents']
+export const provide = ['im-channel']
 
 const NS = settingsNamespace('im-channel')
 
@@ -80,6 +81,19 @@ export function apply(ctx: Context, config: ImChannelSection): void {
   let current: ImChannelSection = config
   let router: Router | undefined
   let disposeRouter: (() => void) | undefined
+  // 暴露 im-channel 服务：其他插件（如 yuyi）可主动推送消息到 IM 用户。
+  // 路由在设置变更时会重建，服务通过闭包始终指向当前实例。
+  ;(ctx as unknown as { provide: (name: string, value: unknown) => void }).provide('im-channel', {
+    /**
+     * 主动推送一条消息给指定渠道用户（须已绑定且记录过 lastTargetId）。
+     * @returns 是否成功投递
+     */
+    pushToUser: (kind: 'feishu' | 'wechat' | 'wecom', userId: string, text: string, options?: { markdown?: boolean }): Promise<boolean> => {
+      const r = router
+      if (r === undefined) return Promise.resolve(false)
+      return r.pushToUser(kind, userId, text, options)
+    },
+  })
   // One driver for the whole plugin lifetime: router rebuilds (settings
   // edits, instance reconciliation) must not orphan bound sessions — the
   // driver's owned-session map is what /bind hands out.

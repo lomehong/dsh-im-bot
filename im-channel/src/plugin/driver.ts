@@ -326,7 +326,10 @@ export class HarnessDriver implements AgentDriver {
     if (record === undefined) {
       this.ctx.logger?.info?.(`prompt ${sessionId.slice(0, 8)} 不在内存中，尝试恢复会话 (driver ${this.instanceId})`)
       try {
-        await this.resumeSession(sessionId)
+        await this.resumeSession(sessionId, {
+          ...(options.userId !== undefined ? { userId: options.userId } : {}),
+          ...(options.isMaster !== undefined ? { isMaster: options.isMaster } : {}),
+        })
         record = this.owned.get(sessionId)
       } catch (resumeError) {
         this.ctx.logger?.warn?.(`prompt ${sessionId.slice(0, 8)} 恢复失败，将创建新会话: ${messageOf(resumeError)} (driver ${this.instanceId})`)
@@ -337,7 +340,7 @@ export class HarnessDriver implements AgentDriver {
       this.ctx.logger?.info?.(`prompt ${sessionId.slice(0, 8)} 创建新会话 (driver ${this.instanceId})`)
       try {
         const cwd = normalizeCwd(this.options.cwd ?? process.cwd())
-        await this.createAgent(SessionId(sessionId), cwd)
+        await this.createAgent(SessionId(sessionId), cwd, options.userId, options.isMaster)
         record = this.owned.get(sessionId)!
       } catch (createError) {
         this.ctx.logger?.error?.(`prompt ${sessionId.slice(0, 8)} 创建新会话也失败: ${messageOf(createError)} (driver ${this.instanceId})`)

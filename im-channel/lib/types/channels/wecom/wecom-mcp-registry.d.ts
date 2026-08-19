@@ -11,6 +11,11 @@ export declare class WecomMcpRegistry {
     private readonly mcpManager;
     /** 注册 MCP 服务器配置 */
     registerServer(config: McpServerConfig): void;
+    /**
+     * 从通用 MCP 服务器管理文件（mcp-servers.json）同步已启用的服务器。
+     * 设置页新增/修改/删除服务器后无需重启即可在下一个 agent 会话生效。
+     */
+    syncFromServerFile(): void;
     /** 将 MCP 工具注册到 agent 上下文（每个 agent 独立注册） */
     registerToAgent(agentCtx: Context): Promise<void>;
     private log;
