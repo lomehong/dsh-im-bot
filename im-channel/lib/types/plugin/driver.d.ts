@@ -20,6 +20,8 @@ export declare class HarnessDriver implements AgentDriver {
     private readonly guestTools;
     /** 当前轮发起者信息（角色 + userId），按会话记录；工具守卫/审批按此归因 */
     private readonly turnInfos;
+    /** 无 inflight 轮次时的定稿输出缓冲（去抖后主动推送）。 */
+    private readonly backgroundBuffer;
     private static nextInstanceId;
     private readonly instanceId;
     constructor(ctx: Context, options?: {
@@ -34,6 +36,8 @@ export declare class HarnessDriver implements AgentDriver {
             reason: string | undefined;
             guestUserId: string | undefined;
         }) => Promise<'allowed-once' | 'rejected'> | undefined;
+        /** 非本插件驱动轮次的定稿输出（schedule/yuyi 唤醒、竞态尾巴）→ 主动推送 IM。 */
+        onBackgroundMessage?: (sessionId: string, text: string) => void;
     });
     startSession(options?: SessionOptions): Promise<string>;
     /** Whether this driver currently owns a live agent for the session id. */
@@ -82,6 +86,9 @@ export declare class HarnessDriver implements AgentDriver {
     prompt(sessionId: string, text: string, options?: PromptOptions): Promise<string>;
     /** Push the current turn view to the live sink, skipping no-op renders. */
     private emitView;
+    /** 无 inflight 轮次的定稿输出：3s 去抖合并后推送给绑定用户。 */
+    private bufferBackgroundMessage;
+    private armBackgroundFlush;
     /** Resolve/reject a turn exactly once and clear its slot. */
     private endTurn;
 }

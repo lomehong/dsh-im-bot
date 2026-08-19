@@ -237,3 +237,59 @@ describe('HarnessDriver.prompt', () => {
     await expect(promise).rejects.toThrow(/turn failed/)
   })
 })
+describe('HarnessDriver premature-settle guard', () => {
+  it('does not settle before the message is claimed when whenIdle fires early', async () => {
+    const ctx = makeContext()
+    const driver = new HarnessDriver(ctx as unknown as never)
+    const sessionId = await driver.startSession({ cwd: '/tmp/proj' })
+    const agent = ctx.agentById.get(sessionId)!
+    // 模拟认领前的瞬时空闲：whenIdle 立即 resolve（真实 harness 偶发此竞态）。
+    agent.whenIdle = () => Promise.resolve()
+    const reply = driver.prompt(sessionId, 'hello')
+    await drain()
+    // 尚未认领：此刻不应结算
+    emit(ctx, agent, {
+      type: 'assistant/message',
+      data: { message: { content: [{ type: 'text', text: 'late chunk' }] } },
+    })
+    // 认领（claimed 置位）：以 handler 形参调用，匹配 messageId 才生效。
+    const claimed = (ctx.eventHandlers.get('agent/inbox/claimed') ?? [])[0]
+    const followupId = agent.followupCalls[agent.followupCalls.length - 1]?.id
+    if (claimed !== undefined && followupId !== undefined) {
+      claimed({ agent: { id: sessionId }, message: { id: followupId }, turn: 1 })
+    }
+    await new Promise(resolve => setTimeout(resolve, 400))
+    await expect(reply).resolves.toBe('late chunk')
+  })
+})
+
+describe('HarnessDriver background responses', () => {
+  it('captures and pushes finalized messages that arrive with no prompt in flight', async () => {
+    vi.useFakeTimers()
+    try {
+      const ctx = makeContext()
+      const pushed: Array<{ sessionId: string; text: string }> = []
+      const driver = new HarnessDriver(ctx as unknown as never, {
+        onBackgroundMessage: (sessionId, text) => { pushed.push({ sessionId, text }) },
+      } as never)
+      const sessionId = await driver.startSession({ cwd: '/tmp/proj' })
+      const agent = ctx.agentById.get(sessionId)!
+      emit(ctx, agent, {
+        type: 'assistant/message',
+        data: { message: { content: [{ type: 'text', text: '提醒：该喝水了' }] } },
+      })
+      emit(ctx, agent, {
+        type: 'assistant/message',
+        data: { message: { content: [{ type: 'text', text: '顺便休息一下眼睛' }] } },
+      })
+      expect(pushed.length).toBe(0)
+      vi.advanceTimersByTime(3_100)
+      expect(pushed.length).toBe(1)
+      expect(pushed[0]?.sessionId).toBe(sessionId)
+      expect(pushed[0]?.text).toContain('提醒：该喝水了')
+      expect(pushed[0]?.text).toContain('顺便休息一下眼睛')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

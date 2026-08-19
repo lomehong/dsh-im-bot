@@ -23,6 +23,8 @@ export class HarnessDriver {
     guestTools;
     /** 当前轮发起者信息（角色 + userId），按会话记录；工具守卫/审批按此归因 */
     turnInfos = new Map();
+    /** 无 inflight 轮次时的定稿输出缓冲（去抖后主动推送）。 */
+    backgroundBuffer = new Map();
     static nextInstanceId = 0;
     instanceId = ++HarnessDriver.nextInstanceId;
     constructor(ctx, options = {}) {
@@ -99,8 +101,20 @@ export class HarnessDriver {
             if (record === undefined || record.agent.session !== session)
                 return;
             const inflight = record.inflight;
-            if (inflight === undefined)
+            if (inflight === undefined) {
+                // 无 inflight 轮次：非本插件驱动的产出（schedule/yuyi 唤醒、
+                // 过早结算后的竞态尾巴）。缓冲去抖后主动推送给绑定用户，
+                // 不再静默丢弃——网页端能看到的内容，IM 也必须能看到。
+                if (event.type === 'assistant/message') {
+                    const text = event.data.message.content
+                        .filter(block => block.type === 'text')
+                        .map(block => block.type === 'text' ? block.text : '')
+                        .join('');
+                    if (text.trim().length > 0)
+                        this.bufferBackgroundMessage(session.header.id, text);
+                }
                 return;
+            }
             if (event.type === 'assistant/message') {
                 const text = event.data.message.content
                     .filter(block => block.type === 'text')
@@ -162,8 +176,10 @@ export class HarnessDriver {
         ctx.on('agent/inbox/claimed', ({ agent, message, turn }) => {
             const record = this.owned.get(agent.id);
             const inflight = record?.inflight;
-            if (inflight !== undefined && inflight.messageId === message.id)
+            if (inflight !== undefined && inflight.messageId === message.id) {
                 inflight.turn = turn;
+                inflight.claimed = true;
+            }
         });
     }
     async startSession(options = {}) {
@@ -466,7 +482,7 @@ export class HarnessDriver {
                 messageId: message.id, turn: undefined,
                 messages: [], partial: '', toolLines: [], toolCount: 0,
                 todos: undefined, usageTokens: 0,
-                interrupted: false, ended: false,
+                interrupted: false, ended: false, claimed: false,
                 ...(options.onUpdate !== undefined ? { onUpdate: options.onUpdate } : {}),
                 ...(options.onMeta !== undefined ? { onMeta: options.onMeta } : {}),
                 mode, lastView: undefined,
@@ -480,9 +496,23 @@ export class HarnessDriver {
                 return;
             }
             this.emitView(inflight);
-            void record.agent.whenIdle().then(() => {
-                this.endTurn(record, inflight, { reply: renderFinal(inflight.mode, inflight.messages, inflight.toolLines) });
-            });
+            // 认领守卫：followup 后立即调 whenIdle，若消息尚未被 inbox 认领
+            // 且尚无任何产出，agent 的瞬时空闲会让 whenIdle 立即 resolve——
+            // 过早结算会丢掉整轮输出（IM 只见首段、网页端全见的根因）。
+            // 重新武装等待（250ms × 最多 40 次 = 10s），认领或出现产出后正常结算。
+            const settleOnIdle = (rearmsLeft) => {
+                void record.agent.whenIdle().then(() => {
+                    if (record.inflight !== inflight)
+                        return;
+                    if (!inflight.claimed && inflight.messages.length === 0 && inflight.partial.length === 0 && inflight.toolCount === 0 && rearmsLeft > 0) {
+                        const retry = setTimeout(() => settleOnIdle(rearmsLeft - 1), 250);
+                        retry.unref?.();
+                        return;
+                    }
+                    this.endTurn(record, inflight, { reply: renderFinal(inflight.mode, inflight.messages, inflight.toolLines) });
+                });
+            };
+            settleOnIdle(40);
         });
     }
     /** Push the current turn view to the live sink, skipping no-op renders. */
@@ -495,6 +525,34 @@ export class HarnessDriver {
             return;
         inflight.lastView = view;
         sink(this.maskOutgoing(view));
+    }
+    /** 无 inflight 轮次的定稿输出：3s 去抖合并后推送给绑定用户。 */
+    bufferBackgroundMessage(sessionId, text) {
+        const existing = this.backgroundBuffer.get(sessionId);
+        if (existing !== undefined) {
+            clearTimeout(existing.timer);
+            existing.texts.push(text);
+            existing.timer = this.armBackgroundFlush(sessionId);
+            return;
+        }
+        this.backgroundBuffer.set(sessionId, { texts: [text], timer: this.armBackgroundFlush(sessionId) });
+    }
+    armBackgroundFlush(sessionId) {
+        const timer = setTimeout(() => {
+            const buffer = this.backgroundBuffer.get(sessionId);
+            this.backgroundBuffer.delete(sessionId);
+            if (buffer === undefined || buffer.texts.length === 0)
+                return;
+            const text = this.maskOutgoing(buffer.texts.join('\n\n'));
+            try {
+                this.options.onBackgroundMessage?.(sessionId, text);
+            }
+            catch {
+                // 推送失败不影响 agent 本身。
+            }
+        }, 3_000);
+        timer.unref?.();
+        return timer;
     }
     /** Resolve/reject a turn exactly once and clear its slot. */
     endTurn(record, inflight, outcome) {

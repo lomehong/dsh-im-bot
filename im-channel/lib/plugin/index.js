@@ -102,6 +102,20 @@ export function apply(ctx, config) {
     const driver = new HarnessDriver(ctx, {
         mcpRegistry,
         guestTools: () => current.guestTools ?? [],
+        // 非本插件驱动轮次的产出（schedule 提醒、yuyi 唤醒、竞态尾巴）
+        // 主动推送到该会话绑定用户的 IM——网页端看得到的，手机上也看得到。
+        onBackgroundMessage: (sessionId, messageText) => {
+            const row = store.findBySession(sessionId);
+            if (row === undefined)
+                return;
+            const r = router;
+            if (r === undefined)
+                return;
+            void r.pushToUser(row.kind, row.userId, messageText, { markdown: true }).then(delivered => {
+                if (!delivered)
+                    ctx.logger.info(`[im-channel] 后台响应推送失败：${row.kind} ${row.userId.slice(0, 8)}… 无可达目标`);
+            });
+        },
         onOwnerApproval: ({ sessionId, toolName, reason, guestUserId }) => {
             const row = store.findBySession(sessionId);
             if (row === undefined)
