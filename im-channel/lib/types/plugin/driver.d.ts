@@ -52,7 +52,8 @@ export declare class HarnessDriver implements AgentDriver {
     private attachWorkspace;
     /**
      * 注入共享记忆服务（如果 dsh-memory 插件已加载）。
-     * 两个插件独立运行，这里通过 ctx.get 检查服务是否存在，不存在则静默跳过。
+     * 先即时查询服务；若不可用（插件尚未加载/ACTIVE），用 ctx.inject 延迟注册——
+     * dsh-memory 就绪后自动补注册工具，不再静默丢失。
      */
     private mountSharedMemory;
     /**

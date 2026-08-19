@@ -238,16 +238,29 @@ export class HarnessDriver {
     }
     /**
      * 注入共享记忆服务（如果 dsh-memory 插件已加载）。
-     * 两个插件独立运行，这里通过 ctx.get 检查服务是否存在，不存在则静默跳过。
+     * 先即时查询服务；若不可用（插件尚未加载/ACTIVE），用 ctx.inject 延迟注册——
+     * dsh-memory 就绪后自动补注册工具，不再静默丢失。
      */
     mountSharedMemory(agentCtx, userId, isMaster) {
-        const memoryService = this.ctx.get('dsh-memory');
-        if (memoryService === undefined)
-            return;
-        // 注册 memory_read / memory_write 工具
         const uid = userId ?? 'unknown';
         const master = isMaster ?? false;
-        memoryService.registerMemoryTools(agentCtx, uid, master);
+        const memoryService = this.ctx.get('dsh-memory');
+        if (memoryService !== undefined) {
+            memoryService.registerMemoryTools(agentCtx, uid, master);
+            return;
+        }
+        // 服务暂不可用：用 inject 等服务就绪后补注册（不再静默跳过）
+        this.ctx.logger?.warn?.(`[im-channel] dsh-memory 服务暂不可用，延迟注册记忆工具 (uid=${uid}, master=${master})`);
+        const injectCtx = agentCtx;
+        if (typeof injectCtx.inject === 'function') {
+            injectCtx.inject(['dsh-memory'], () => {
+                const svc = this.ctx.get('dsh-memory');
+                if (svc !== undefined) {
+                    svc.registerMemoryTools(agentCtx, uid, master);
+                    this.ctx.logger?.info?.(`[im-channel] dsh-memory 服务就绪，已补注册记忆工具 (uid=${uid}, master=${master})`);
+                }
+            });
+        }
     }
     /**
      * 注入共享记忆摘要到 agent 的上下文，让 agent 知道有记忆可以读取。
