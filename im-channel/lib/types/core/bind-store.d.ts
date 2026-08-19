@@ -48,6 +48,11 @@ export declare class BindStore {
     sessionIdFor(ref: ImUserRef): string | undefined;
     /** 检查用户是否为主人（通过 /bind 绑定） */
     isMasterFor(ref: ImUserRef): boolean;
+    /** Reverse lookup: which (kind, user) a session id currently belongs to. */
+    findBySession(sessionId: string): {
+        kind: ImUserRef['kind'];
+        userId: string;
+    } | undefined;
     /**
      * The channel owner (digital-avatar claimant): the first isMaster row of a
      * channel kind. Everyone else on that channel is a guest riding the

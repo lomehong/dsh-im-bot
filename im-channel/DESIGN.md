@@ -77,7 +77,10 @@ im-channel 插件（外部包，经 install.mjs 或 pnpm add git 安装）
 - 可选用户白名单：settings `im-channel.allowlist`（userId 或 `kind:userId`），名单外的消息静默忽略（不暴露探测面）
 - 飞书群聊仅响应被 @ 的消息（mention 占位符会从文本中剥离）
 - **数字分身与访客权限**：渠道内第一个 `/bind` 者为 Owner，其余用户为访客（共享 Owner 会话）
-  - 访客工具门禁：driver 在 agent setup 里注册 `agentCtx.tools.guard()`（单调、只能拒绝），访客发起的轮次中未命中 `im-channel.guestTools` 白名单（精确名/`前缀*`）的工具调用直接拒绝，拒绝文案面向模型，agent 会向访客解释；Owner 轮次不受影响
+  - 访客工具门禁：driver 在插件根 context 注册【全局层】`tools.guard()`（单调、只能拒绝），actor 经 `session.header.parentSession` 链归因到根会话——子代理派生的调用同样受控；未命中 `im-channel.guestTools` 白名单（精确名/`前缀*`）的工具调用走审批升级
+  - 工具审批：`tools/pre-execute` 对访客非白名单工具返回 `{kind:'ask'}`，经 harness `approval/request` 瀑布线交给 ApprovalBridge——推卡片给渠道 Owner、等待其 IM 回复「允许/拒绝」（3 分钟超时 fail-closed）；无审批服务时守卫兜底拒绝
+  - 外发脱敏：driver 对流式视图与终稿统一过 `ctx.masking.maskTextSync`，敏感信息不落第三方 IM
+  - 长回复治理：超 6000 字符的回复落盘 `~/.dsh/im-channel/spills/`，IM 先发首尾预览 + `/全文 <编号>` 取回；轮末附 token 页脚，`/状态` 显示上下文水位，`/压缩`（Owner）主动触发 compaction
   - 访客命令门禁：`im-channel.guestCommands`（默认 帮助/状态/回复/停止），管理命令（bind/项目/模型/思考/新建/unbind）仅 Owner
 - 工具审批：暂未实现（agent 使用 harness 默认权限策略）；规划接飞书卡片按钮回调做危险工具确认
   - 设计草案（见下文 § 工具审批）：hooks `ctx.on('session/event')` 监听 `tool/call`，命中危险名单时调 `ctx.approval.request({tool, reason, callId})`；通过 `approval/request` waterfall 监听器渲染飞书 / 微信卡，按钮回调用 `approval/decided` 决定 allow / deny

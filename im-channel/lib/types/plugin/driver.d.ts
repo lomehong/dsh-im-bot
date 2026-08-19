@@ -18,8 +18,8 @@ export declare class HarnessDriver implements AgentDriver {
     private readonly mcpRegistry;
     /** 访客工具白名单（设置实时读取）；决定 tools.guard 是否放行当前轮的工具调用 */
     private readonly guestTools;
-    /** 当前轮发起者（owner/guest），按会话记录，供 tools.guard 查询 */
-    private readonly turnActors;
+    /** 当前轮发起者信息（角色 + userId），按会话记录；工具守卫/审批按此归因 */
+    private readonly turnInfos;
     private static nextInstanceId;
     private readonly instanceId;
     constructor(ctx: Context, options?: {
@@ -27,6 +27,13 @@ export declare class HarnessDriver implements AgentDriver {
         agentOptions?: AgentOptions;
         mcpRegistry?: WecomMcpRegistry;
         guestTools?: () => readonly string[];
+        /** 访客工具审批：把决策交给插件层（推卡片给 Owner、等待 IM 回复）。 */
+        onOwnerApproval?: (info: {
+            sessionId: string;
+            toolName: string;
+            reason: string | undefined;
+            guestUserId: string | undefined;
+        }) => Promise<'allowed-once' | 'rejected'> | undefined;
     });
     startSession(options?: SessionOptions): Promise<string>;
     /** Whether this driver currently owns a live agent for the session id. */
@@ -40,15 +47,24 @@ export declare class HarnessDriver implements AgentDriver {
     resumeSession(sessionId: string, options?: SessionOptions): Promise<string>;
     /** Create (or resume) an agent with the gateway-equivalent composition. */
     private createAgent;
-    /** Group the session under the workspace owning its cwd, when registered. */
     /**
-     * Register the guest tool gate on one agent's scoped context: a monotonic
-     * guard (deny-only, ordering cannot re-allow) that blocks tool calls during
-     * guest-initiated turns unless the tool matches the owner-configured
-     * guestTools allowlist. Owner turns pass through untouched. The guard's
-     * layer is bound to the agent's context, so it disposes with the agent.
+     * 归因工具调用的发起角色：沿 parentSession 链回溯到根会话（子代理
+     * session.header.parentSession 指向父会话），再查 turnActors。深度上限
+     * 防御环；中途 agent 不在注册表时按已知最外层计。
      */
-    private mountGuestGuard;
+    private actorOfAgent;
+    /**
+     * P0 安全：外发 IM 前的敏感信息脱敏（masking 服务存在时）。流式视图与
+     * 终稿统一走这里；服务不可用时原样返回。
+     */
+    private maskOutgoing;
+    /** Token 用量快照（/状态 展示）；token-meter 服务缺席时返回 undefined。 */
+    usageOf(sessionId: string): {
+        totalTokens: number;
+    } | undefined;
+    /** 主动压缩会话（/压缩）；compaction 服务缺席或不适用时返回 false。 */
+    compact(sessionId: string): Promise<boolean>;
+    /** Group the session under the workspace owning its cwd, when registered. */
     private attachWorkspace;
     /**
      * 注入共享记忆服务（如果 dsh-memory 插件已加载）。

@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { Router, type AgentDriver, type PromptOptions, type SessionOptions } from '../src/core/router.ts'
 import type { ImChannel, ImUserId, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../src/core/channel.ts'
@@ -368,5 +371,71 @@ describe('router command gating (digital avatar)', () => {
     h.channel.receive('/项目')
     await settle()
     expect(h.channel.sent.some(m => m.text.includes('尚未初始化'))).toBe(true)
+  })
+})
+
+describe('router approval + spill + footer', () => {
+  it('consumes owner allow/reply before routing when an approval is pending', async () => {
+    const consumed: string[] = []
+    const h = await makeRouter()
+    ;(h.router as unknown as { deps: { approval: { consumeOwnerReply: (kind: string, owner: string, text: string) => boolean } } }).deps.approval = {
+      consumeOwnerReply: (_kind, _owner, text) => {
+        if (text === '允许') { consumed.push(text); return true }
+        return false
+      },
+    }
+    bindReady(h, 'ou_owner')
+    h.channel.receive('允许', 'ou_owner')
+    await settle()
+    expect(consumed).toEqual(['允许'])
+    expect(h.driver.promptCalls.length).toBe(0)
+  })
+
+  it('appends a token footer and spills over-long replies with /全文 retrieval', async () => {
+    const spillDir = join(tmpdir(), `im-channel-spill-${Date.now()}`)
+    process.env.IM_CHANNEL_SPILL_DIR = spillDir
+    try {
+      const h = await makeRouter()
+      bindReady(h)
+      const long = 'A'.repeat(7000)
+      const meta = { usageTokens: 12345 }
+      h.driver.prompt = async (_id, _text, options) => {
+        options?.onMeta?.(meta)
+        return long
+      }
+      h.channel.receive('写一篇长文')
+      await settle()
+      const sink = h.channel.sinks[0]
+      const sent = sink.finished?.text ?? ''
+      expect(sent.length).toBeLessThan(long.length)
+      expect(sent).toContain('/全文')
+      expect(sent).toContain('12.3k tokens')
+      const locator = /\/全文 ([a-z0-9]+)/.exec(sent)?.[1]
+      expect(locator).toBeDefined()
+      // /全文 取回
+      h.channel.receive(`/全文 ${locator}`)
+      await settle()
+      const fulltext = h.channel.sent.filter(m => m.text.includes(long.slice(0, 100)))
+      expect(fulltext.length).toBe(1)
+    } finally {
+      delete process.env.IM_CHANNEL_SPILL_DIR
+      rmSync(spillDir, { recursive: true, force: true })
+    }
+  })
+
+  it('gates /压缩 to the owner and surfaces context tokens in /状态', async () => {
+    const h = await makeRouter()
+    bindReady(h, 'ou_owner')
+    ;(h.router as unknown as { deps: { compact: (id: string) => Promise<boolean>; usageOf: (id: string) => { totalTokens: number } | undefined } }).deps.compact = async () => true
+    ;(h.router as unknown as { deps: { compact?: unknown; usageOf: (id: string) => { totalTokens: number } | undefined } }).deps.usageOf = () => ({ totalTokens: 45678 })
+    h.channel.receive('/压缩', 'ou_guest')
+    await settle()
+    expect(h.channel.sent.some(m => m.text.includes('仅 Owner 可用'))).toBe(true)
+    h.channel.receive('/压缩', 'ou_owner')
+    await settle()
+    expect(h.channel.sent.some(m => m.text.includes('压缩完成'))).toBe(true)
+    h.channel.receive('/状态', 'ou_owner')
+    await settle()
+    expect(h.channel.sent.some(m => m.text.includes('45.7k tokens'))).toBe(true)
   })
 })

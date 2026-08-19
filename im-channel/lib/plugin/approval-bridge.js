@@ -1,56 +1,113 @@
 /**
- * IM-mediated tool approval bridge.
+ * IM-mediated tool approval bridge (owner-reply style).
  *
- * The harness exposes an `approval/request` waterfall for any listener that
- * wants to answer a permission prompt. This bridge makes im-channel one such
- * listener: when a tool is about to run and the harness asks for approval,
- * the bridge posts an Allow / Deny card to the bound IM user and waits for
- * the user's reply via the host-side card-callback route.
- *
- * **Status: scaffold.** The actual wiring (host-side callback route, event
- * scope subscription, handoff between waterfall decision and IM card reply)
- * depends on the harness `user-approval` service surface, which is peer-dep
- * only — no live runtime tests possible without a deployment. What is real
- * and tested here: the card-payload renderers below (`renderFeishuCard`,
- * `renderWechatCard`) and the outcome vocabulary (`ApprovalOutcome`).
+ * When a guest-initiated turn hits a tool outside the guestTools allowlist,
+ * the driver escalates through the harness `approval/request` waterfall
+ * (tools/pre-execute → {kind:'ask'}). This bridge turns that request into an
+ * IM card to the channel owner and waits for the owner's REPLY text —
+ * 允许/y/allow or 拒绝/n/deny — because Feishu card button callbacks would
+ * need a publicly reachable URL that a localhost dsh host cannot offer.
+ * Unanswered requests fail closed (rejected) after the timeout.
  */
-/** Build a Feishu interactive card payload with two action buttons. The
- *  callback URL is host-routed (`/im-channel/approval/decide`) and carries the
- *  approval id + decision via the button value. */
-export function renderFeishuCard(model, approvalId) {
-    return {
-        type: 'interactive',
-        card: {
-            schema: '2.0',
-            config: { wide_screen_mode: true },
-            body: {
-                elements: [
-                    { tag: 'markdown', content: `⚠️ **Tool approval needed**\n\nTool: \`${model.tool}\`\nReason: ${model.reason}` },
-                    { tag: 'action', actions: [
-                            { tag: 'button', type: 'primary', text: { tag: 'plain_text', content: 'Allow (once)' }, value: { approvalId, decision: 'allowed-once' } },
-                            { tag: 'button', type: 'danger', text: { tag: 'plain_text', content: 'Deny' }, value: { approvalId, decision: 'rejected' } },
-                        ] },
-                ],
-            },
-        },
-    };
+/** How long an owner has to answer before the request fails closed. */
+export const APPROVAL_TIMEOUT_MS = 180_000;
+/** Reply keywords mapped to decisions (normalized: lowercase, no spaces). */
+const ALLOW_WORDS = new Set(['允许', '同意', 'y', 'yes', 'allow', 'approve', '1']);
+const DENY_WORDS = new Set(['拒绝', '不同意', 'n', 'no', 'deny', 'reject', '0']);
+/** Parse an owner reply into a decision; undefined = not a decision keyword. */
+export function parseApprovalReply(text) {
+    const normalized = text.trim().toLowerCase().replace(/\s+/g, '');
+    if (normalized.length === 0 || normalized.length > 12)
+        return undefined;
+    if (ALLOW_WORDS.has(normalized))
+        return 'allowed-once';
+    if (DENY_WORDS.has(normalized))
+        return 'rejected';
+    return undefined;
 }
-/** Wechat has no message-editing / card primitives, so the only delivery
- *  surface is plain text. We surface the approval + a short URL that opens
- *  the harness web UI where the user can decide. */
-export function renderWechatCard(model, harnessUrl) {
-    const tail = `Approve / deny: ${harnessUrl}/im-channel/approval/decide?tool=${encodeURIComponent(model.tool)}&callId=${encodeURIComponent(model.callId ?? '')}`;
-    return `⚠️ Tool approval needed\nTool: ${model.tool}\nReason: ${model.reason}\n${tail}`;
-}
-/** Send one approval card through the right channel sender. */
-export async function postApprovalCard(sender, target, model, ctx) {
-    if (target.kind === 'feishu') {
-        if (ctx.approvalId === undefined)
-            throw new Error('feishu approval card requires approvalId');
-        await sender.send(target, { text: JSON.stringify(renderFeishuCard(model, ctx.approvalId)) });
-        return;
+/**
+ * Per-host coordinator: at most one pending approval per channel kind (the
+ * owner answers one question at a time on their phone). The router consults
+ * consumeOwnerReply() before normal routing so 允许/拒绝 never reach the
+ * agent as chat input.
+ */
+export class ApprovalBridge {
+    notify;
+    log;
+    pending = new Map();
+    constructor(notify, log = () => { }) {
+        this.notify = notify;
+        this.log = log;
     }
-    if (ctx.harnessUrl === undefined)
-        throw new Error('wechat approval card requires harnessUrl');
-    await sender.send(target, { text: renderWechatCard(model, ctx.harnessUrl) });
+    /** Whether a decision is outstanding for the channel kind. */
+    hasPending(kind) {
+        return this.pending.has(kind);
+    }
+    /**
+     * Ask the channel owner to approve a guest tool call. Resolves with the
+     * owner's decision, or 'rejected' on timeout / delivery failure.
+     */
+    async request(kind, ownerUserId, guestLabel, info) {
+        // Serialize per channel: an outstanding question is answered first.
+        const existing = this.pending.get(kind);
+        if (existing !== undefined) {
+            clearTimeout(existing.timer);
+            existing.resolve('rejected');
+            this.pending.delete(kind);
+        }
+        const reason = info.reason?.slice(0, 200) ?? '';
+        const card = [
+            '🔐 访客工具审批',
+            `访客：${guestLabel}`,
+            `工具：${info.toolName}`,
+            ...(reason.length > 0 ? [`说明：${reason}`] : []),
+            '',
+            `回复「允许」或「拒绝」（${Math.round(APPROVAL_TIMEOUT_MS / 60_000)} 分钟内有效，超时自动拒绝）`,
+        ].join('\n');
+        return await new Promise(resolve => {
+            let settled = false;
+            const finish = (decision) => {
+                if (settled)
+                    return;
+                settled = true;
+                clearTimeout(timer);
+                this.pending.delete(kind);
+                resolve(decision);
+            };
+            const timer = setTimeout(() => {
+                this.log(`审批超时未回复（${info.toolName}），自动拒绝`);
+                void this.notify(kind, ownerUserId, `⏱ 工具 ${info.toolName} 的审批已超时，自动拒绝。`);
+                finish('rejected');
+            }, APPROVAL_TIMEOUT_MS);
+            timer.unref?.();
+            this.pending.set(kind, { toolName: info.toolName, ownerUserId, resolve: finish, timer });
+            void this.notify(kind, ownerUserId, card).then(delivered => {
+                if (!delivered) {
+                    this.log(`审批卡片投递失败（${info.toolName}），直接拒绝`);
+                    finish('rejected');
+                }
+            });
+        });
+    }
+    /**
+     * Router hook: when the channel owner replies while a decision is pending,
+     * consume the message as the decision. Returns true when the message was
+     * consumed (the router must stop processing it).
+     */
+    consumeOwnerReply(kind, ownerUserId, text) {
+        const pending = this.pending.get(kind);
+        if (pending === undefined)
+            return false;
+        // 纵深防御：即便调用方漏了身份校验，桥本身也只接受该渠道 Owner 的回复。
+        if (pending.ownerUserId !== ownerUserId)
+            return false;
+        const decision = parseApprovalReply(text);
+        if (decision === undefined)
+            return false;
+        this.pending.delete(kind);
+        clearTimeout(pending.timer);
+        pending.resolve(decision);
+        void this.notify(kind, ownerUserId, decision === 'allowed-once' ? `✅ 已允许（本次）工具 ${pending.toolName}` : `🚫 已拒绝工具 ${pending.toolName}`);
+        return true;
+    }
 }

@@ -1,77 +1,93 @@
 /**
- * Approval-bridge renderer tests: the card-payload builders are pure
- * functions, so they're fully testable in isolation. The actual waterfall
- * wiring depends on the harness's user-approval service and is exercised
- * end-to-end in a deployment, not here.
+ * Owner-reply approval bridge tests: keyword parsing, pending lifecycle
+ * (request → owner reply → decision), timeout fail-closed, and delivery
+ * failure — all against the pure coordinator with a fake notifier.
  */
-import { describe, expect, it } from 'vitest'
-import { postApprovalCard, renderFeishuCard, renderWechatCard, type ApprovalPromptTarget, type ApprovalPromptSender } from '../src/plugin/approval-bridge.ts'
+import { describe, expect, it, vi } from 'vitest'
+import { ApprovalBridge, APPROVAL_TIMEOUT_MS, parseApprovalReply } from '../src/plugin/approval-bridge.ts'
 
-describe('renderFeishuCard', () => {
-  it('renders an interactive card with Allow and Deny buttons', () => {
-    const card = renderFeishuCard({ tool: 'bash', reason: 'delete files', callId: 'c-1' }, 'apr-1')
-    expect(card.type).toBe('interactive')
-    expect(card.card.schema).toBe('2.0')
-    const elements = card.card.body.elements
-    expect(elements.length).toBe(2)
-    const actions = (elements[1] as { actions: Array<{ value: { decision: string; approvalId: string } }> }).actions
-    expect(actions).toHaveLength(2)
-    expect(actions[0]?.value).toEqual({ approvalId: 'apr-1', decision: 'allowed-once' })
-    expect(actions[1]?.value).toEqual({ approvalId: 'apr-1', decision: 'rejected' })
+describe('parseApprovalReply', () => {
+  it('maps bilingual keywords to decisions', () => {
+    expect(parseApprovalReply('允许')).toBe('allowed-once')
+    expect(parseApprovalReply(' Y ')).toBe('allowed-once')
+    expect(parseApprovalReply('allow')).toBe('allowed-once')
+    expect(parseApprovalReply('拒绝')).toBe('rejected')
+    expect(parseApprovalReply('n')).toBe('rejected')
+  })
+
+  it('leaves ordinary chat untouched', () => {
+    expect(parseApprovalReply('帮我看看那个问题')).toBeUndefined()
+    expect(parseApprovalReply('')).toBeUndefined()
+    expect(parseApprovalReply('这句话特别长肯定不是审批关键词')).toBeUndefined()
   })
 })
 
-describe('renderWechatCard', () => {
-  it('renders a plain-text fallback with the harness decision URL', () => {
-    const text = renderWechatCard({ tool: 'bash', reason: 'delete files', callId: 'c-1' }, 'http://localhost:3080')
-    expect(text.startsWith('⚠️ Tool approval needed')).toBe(true)
-    expect(text).toContain('bash')
-    expect(text).toContain('delete files')
-    expect(text).toContain('http://localhost:3080/im-channel/approval/decide?tool=bash&callId=c-1')
+function makeBridge(delivered = true): { bridge: ApprovalBridge; sent: Array<{ kind: string; userId: string; text: string }> } {
+  const sent: Array<{ kind: string; userId: string; text: string }> = []
+  const bridge = new ApprovalBridge(async (kind, userId, text) => {
+    sent.push({ kind, userId, text })
+    return delivered
+  })
+  return { bridge, sent }
+}
+
+describe('ApprovalBridge', () => {
+  it('delivers the card to the owner and resolves on their reply', async () => {
+    const { bridge, sent } = makeBridge()
+    const decision = bridge.request('feishu', 'ou_owner', '访客甲', { toolName: 'bash', reason: '列出目录' })
+    expect(bridge.hasPending('feishu')).toBe(true)
+    expect(sent[0]?.text).toContain('bash')
+    expect(sent[0]?.userId).toBe('ou_owner')
+    const consumed = bridge.consumeOwnerReply('feishu', 'ou_owner', ' 允许 ')
+    expect(consumed).toBe(true)
+    await expect(decision).resolves.toBe('allowed-once')
+    // 决策后的确认回执
+    expect(sent.some(s => s.text.includes('已允许'))).toBe(true)
+    expect(bridge.hasPending('feishu')).toBe(false)
   })
 
-  it('omits callId in the URL when the request has none', () => {
-    const text = renderWechatCard({ tool: 'fs.write', reason: 'overwrite', callId: undefined }, 'http://h')
-    expect(text).toContain('callId=')
-    // Empty-value query is fine; we don't strip it (server treats empty as absent).
+  it('only the owner of the pending channel can decide; others pass through', async () => {
+    const { bridge } = makeBridge()
+    const decision = bridge.request('feishu', 'ou_owner', '访客甲', { toolName: 'bash', reason: undefined })
+    expect(bridge.consumeOwnerReply('feishu', 'ou_other', '允许')).toBe(false)
+    expect(bridge.consumeOwnerReply('wecom', 'ou_owner', '允许')).toBe(false)
+    expect(bridge.consumeOwnerReply('feishu', 'ou_owner', '拒绝')).toBe(true)
+    await expect(decision).resolves.toBe('rejected')
   })
-})
 
-describe('postApprovalCard', () => {
-  it('routes feishu targets through renderFeishuCard JSON', async () => {
-    const sent: Array<{ target: ApprovalPromptTarget; message: { text: string } }> = []
-    const sender: ApprovalPromptSender = {
-      async send(target, message) { sent.push({ target, message }) },
+  it('non-keyword owner replies are not consumed', async () => {
+    const { bridge } = makeBridge()
+    const decision = bridge.request('feishu', 'ou_owner', '访客甲', { toolName: 'bash', reason: undefined })
+    expect(bridge.consumeOwnerReply('feishu', 'ou_owner', '先等一下')).toBe(false)
+    expect(bridge.hasPending('feishu')).toBe(true)
+    bridge.consumeOwnerReply('feishu', 'ou_owner', 'y')
+    await expect(decision).resolves.toBe('allowed-once')
+  })
+
+  it('rejects when the card cannot be delivered', async () => {
+    const { bridge } = makeBridge(false)
+    await expect(bridge.request('feishu', 'ou_owner', '访客甲', { toolName: 'bash', reason: undefined }))
+      .resolves.toBe('rejected')
+  })
+
+  it('times out fail-closed when the owner never replies', async () => {
+    vi.useFakeTimers()
+    try {
+      const { bridge } = makeBridge()
+      const decision = bridge.request('feishu', 'ou_owner', '访客甲', { toolName: 'bash', reason: undefined })
+      vi.advanceTimersByTime(APPROVAL_TIMEOUT_MS + 1_000)
+      await expect(decision).resolves.toBe('rejected')
+    } finally {
+      vi.useRealTimers()
     }
-    await postApprovalCard(sender, { kind: 'feishu', targetId: 'chat-1' }, { tool: 'bash', reason: 'rm', callId: 'c' }, { approvalId: 'apr-1' })
-    expect(sent).toHaveLength(1)
-    expect(sent[0]!.target.kind).toBe('feishu')
-    const body = JSON.parse(sent[0]!.message.text)
-    expect(body.type).toBe('interactive')
   })
 
-  it('routes wechat targets through the plain-text fallback', async () => {
-    const sent: Array<{ target: ApprovalPromptTarget; message: { text: string } }> = []
-    const sender: ApprovalPromptSender = {
-      async send(target, message) { sent.push({ target, message }) },
-    }
-    await postApprovalCard(sender, { kind: 'wechat', targetId: 'wx-1' }, { tool: 'bash', reason: 'rm', callId: 'c' }, { harnessUrl: 'http://h' })
-    expect(sent).toHaveLength(1)
-    expect(sent[0]!.target.kind).toBe('wechat')
-    expect(sent[0]!.message.text.startsWith('⚠️')).toBe(true)
-  })
-
-  it('refuses to send a feishu card without an approvalId', async () => {
-    const sender: ApprovalPromptSender = { async send() {} }
-    await expect(
-      postApprovalCard(sender, { kind: 'feishu', targetId: 'chat-1' }, { tool: 'bash', reason: 'rm', callId: 'c' }, {})
-    ).rejects.toThrow(/approvalId/)
-  })
-
-  it('refuses to send a wechat card without a harnessUrl', async () => {
-    const sender: ApprovalPromptSender = { async send() {} }
-    await expect(
-      postApprovalCard(sender, { kind: 'wechat', targetId: 'wx-1' }, { tool: 'bash', reason: 'rm', callId: 'c' }, {})
-    ).rejects.toThrow(/harnessUrl/)
+  it('a second request on the same channel supersedes the first (rejected)', async () => {
+    const { bridge } = makeBridge()
+    const first = bridge.request('feishu', 'ou_owner', '访客甲', { toolName: 'bash', reason: undefined })
+    const second = bridge.request('feishu', 'ou_owner', '访客乙', { toolName: 'pwsh', reason: undefined })
+    await expect(first).resolves.toBe('rejected')
+    bridge.consumeOwnerReply('feishu', 'ou_owner', '允许')
+    await expect(second).resolves.toBe('allowed-once')
   })
 })

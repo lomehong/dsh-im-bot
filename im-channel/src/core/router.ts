@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { ImChannel, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from './channel.ts'
 import { modeOf } from './render.ts'
 import { DEFAULT_GUEST_COMMANDS } from './guest-permissions.ts'
@@ -35,6 +38,8 @@ export interface PromptOptions {
   userId?: string
   /** 是否为绑定主人（重启恢复/兜底重建会话时用于记忆权限过滤）。 */
   isMaster?: boolean
+  /** Turn-end metadata (token usage) for reply footers. */
+  onMeta?: (meta: { usageTokens: number }) => void
 }
 
 /** Per-session knobs a /新建 or /bind session can carry. */
@@ -94,6 +99,12 @@ export interface RouterDeps {
   readonly efforts?: () => Array<{ id: string; name: string }> | Promise<Array<{ id: string; name: string }>>
   /** Commands a guest may run (canonical ids); absent = DEFAULT_GUEST_COMMANDS. */
   readonly guestCommands?: () => readonly string[]
+  /** Owner-reply approval coordinator; consumes 允许/拒绝 before routing. */
+  readonly approval?: { consumeOwnerReply(kind: InboundMessage['from']['kind'], ownerUserId: string, text: string): boolean }
+  /** Token usage snapshot for /状态; absent hides the context line. */
+  readonly usageOf?: (sessionId: string) => { totalTokens: number } | undefined
+  /** Manually compact a session (/压缩); absent reports unavailable. */
+  readonly compact?: (sessionId: string) => Promise<boolean>
   /** Diagnostic sink (wired to the host logger); absent = silent. */
   readonly log?: (line: string) => void
   /**
@@ -240,6 +251,14 @@ export class Router {
         this.log(`[im-channel] ${channel.label} 拒绝未授权用户 ${message.from.userId.slice(0, 12)}…`)
         return
       }
+      // Owner 的「允许/拒绝」回复优先于一切路由：有待审批请求时作为决策消费。
+      if (this.deps.approval !== undefined) {
+        const approvalOwner = this.deps.store.ownerFor?.(message.from.kind)
+        if (approvalOwner !== undefined && approvalOwner.userId === message.from.userId
+          && this.deps.approval.consumeOwnerReply(message.from.kind, approvalOwner.userId, message.text)) {
+          return
+        }
+      }
       if (message.text.startsWith(this.commandPrefix)) {
         await this.runCommand(channel, target, message)
         return
@@ -348,8 +367,16 @@ export class Router {
       const department = userInfo?.department?.join('、') ?? ''
       const identitySeg = [label, displayName, position, department].filter(Boolean).join('·')
       const enrichedText = `[${identitySeg}] ${message.text}`
+      let usageTokens = 0
+      promptOptions.onMeta = meta => { usageTokens = meta.usageTokens }
       const reply = await this.deps.driver.prompt(sessionId, enrichedText, promptOptions)
-      await sink.finish({ text: reply, markdown: true })
+      let finalText = usageTokens > 0 ? `${reply}${FOOTER_SEP}${formatTokens(usageTokens)} tokens` : reply
+      const spilled = spillIfLong(finalText)
+      if (spilled.locator !== undefined) {
+        this.log(`[im-channel] 长回复落盘 ${spilled.locator}（${finalText.length} 字符）`)
+        finalText = spilled.text
+      }
+      await sink.finish({ text: finalText, markdown: true })
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error)
       await sink.fail(`⚠️ ${text}`)
@@ -363,7 +390,7 @@ export class Router {
     // 命令门禁：Owner 全量；访客仅限 guestCommands；未认领渠道仅 bind 放行。
     const owner = this.deps.store.ownerFor?.(message.from.kind)
     const isOwner = owner !== undefined && owner.userId === message.from.userId
-    const ownerOnly = new Set(['bind', 'project', 'model', 'think', 'new', 'unbind', 'mode'])
+    const ownerOnly = new Set(['bind', 'project', 'model', 'think', 'new', 'unbind', 'mode', 'compact'])
     if (!isOwner && ownerOnly.has(command)) {
       if (command === 'bind' && owner === undefined) {
         // 未认领渠道：任何人的 /bind 都是认领动作，放行到下方处理。
@@ -429,6 +456,8 @@ export class Router {
         }
         lines.push(`会话：${sessionId.slice(0, 8)}…`)
         lines.push(`你的身份：${avatar.userId === message.from.userId ? 'Owner' : '访客'}`)
+        const usage = this.deps.usageOf?.(sessionId)
+        if (usage !== undefined) lines.push(`上下文：约 ${formatTokens(usage.totalTokens)} tokens`)
         await this.safeSend(channel, target, { text: lines.join('\n') })
         return
       }
@@ -552,6 +581,35 @@ export class Router {
         await this.safeSend(channel, target, { text: `✅ 已切换项目：${picked.title || picked.path}\n🆕 新线程已开启，直接发消息开始。` })
         return
       }
+      case 'fulltext': {
+        const locator = (args[0] ?? '').trim()
+        if (!/^[a-z0-9]{4,12}$/.test(locator)) {
+          await this.safeSend(channel, target, { text: '用法：/全文 <编号>。编号见长回复末尾的提示。' })
+          return
+        }
+        const content = readSpill(locator)
+        if (content === undefined) {
+          await this.safeSend(channel, target, { text: `未找到编号 ${locator} 的全文（可能已过期）。` })
+          return
+        }
+        await this.safeSend(channel, target, { text: content })
+        return
+      }
+      case 'compact': {
+        const avatarSession = this.deps.store.ownerFor?.(message.from.kind)
+        if (avatarSession === undefined) {
+          await this.safeSend(channel, target, { text: '机器人尚未初始化。' })
+          return
+        }
+        if (this.deps.compact === undefined) {
+          await this.safeSend(channel, target, { text: '压缩服务不可用。' })
+          return
+        }
+        await this.safeSend(channel, target, { text: '⏳ 正在压缩会话上下文…' })
+        const compacted = await this.deps.compact(avatarSession.sessionId)
+        await this.safeSend(channel, target, { text: compacted ? '✅ 压缩完成，历史要点已保留。' : '⚠️ 本次未执行压缩（可能尚不需要）。' })
+        return
+      }
       case 'mode': {
         await this.safeSend(channel, target, { text: '模式切换即将上线。' })
         return
@@ -600,6 +658,50 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Token footer: blank line + rule + coin + usage. */
+const FOOTER_SEP = '\n\n──────────\n🪙 本轮约 '
+
+/** Replies beyond this length spill to disk and ship a head/tail preview. */
+const SPILL_THRESHOLD = 6_000
+const SPILL_HEAD = 2_800
+const SPILL_TAIL = 1_200
+
+function spillsDir(): string {
+  return process.env.IM_CHANNEL_SPILL_DIR ?? join(homedir(), '.dsh', 'im-channel', 'spills')
+}
+
+/** Spill an over-long reply to disk; returns the preview text plus its locator. */
+function spillIfLong(text: string): { text: string; locator?: string } {
+  if (text.length <= SPILL_THRESHOLD) return { text }
+  const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789'
+  const locator = Array.from({ length: 8 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('')
+  try {
+    mkdirSync(spillsDir(), { recursive: true })
+    writeFileSync(join(spillsDir(), `${locator}.txt`), text, 'utf8')
+  } catch {
+    return { text } // 落盘失败时原样发送，宁长勿丢
+  }
+  const preview = `${text.slice(0, SPILL_HEAD)}\n\n…〔全文 ${text.length} 字符已保存，发送 /全文 ${locator} 查看〕\n\n${text.slice(text.length - SPILL_TAIL)}`
+  return { text: preview, locator }
+}
+
+/** Read back a spilled reply by locator; undefined when missing or invalid. */
+function readSpill(locator: string): string | undefined {
+  if (!/^[a-z0-9]{4,12}$/.test(locator)) return undefined
+  const file = join(spillsDir(), `${locator}.txt`)
+  if (!existsSync(file)) return undefined
+  try {
+    return readFileSync(file, 'utf8')
+  } catch {
+    return undefined
+  }
+}
+
+/** 12345 becomes 12.3k for compact token footers. */
+function formatTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
 /** Chinese command names mapped to their canonical handlers. */
 const COMMAND_ALIASES: Record<string, string> = {
   帮助: 'help',
@@ -613,6 +715,8 @@ const COMMAND_ALIASES: Record<string, string> = {
   回复: 'reply',
   停止: 'stop',
   cancel: 'stop',
+  全文: 'fulltext',
+  压缩: 'compact',
 }
 
 const COMMAND_LIST = `机器人命令：
@@ -623,6 +727,8 @@ const COMMAND_LIST = `机器人命令：
 /模型 — 查看 / 切换模型
 /思考 — 切换思考级别
 /停止 — 停止正在执行的任务
+/全文 <编号> — 查看被截断长回复的全文
+/压缩 — 压缩会话上下文（仅 Owner）
 /回复 — 切换回复详细程度（流式推送过程）
 /bind — 绑定当前聊天
 /unbind — 解绑当前聊天`

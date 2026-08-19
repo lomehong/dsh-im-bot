@@ -65,3 +65,23 @@ describe('interruptedNote', () => {
     expect(interruptedNote('')).toBe('⏹ 本轮已被新消息中断。')
   })
 })
+
+describe('renderLive todos', () => {
+  it('verbose renders the todo snapshot above tool lines', () => {
+    const todos = [
+      { content: '扫描代码', status: 'completed' },
+      { content: '写测试', status: 'in_progress' },
+      { content: '提交', status: 'pending' },
+    ]
+    const view = renderLive('verbose', ['第一段'], [], 0, '', todos)
+    expect(view).toContain('☑ 扫描代码')
+    expect(view).toContain('◐ 写测试')
+    expect(view).toContain('☐ 提交')
+    expect(view).toContain('第一段')
+  })
+
+  it('normal mode ignores todos', () => {
+    const view = renderLive('normal', ['回复'], [], 0, '', [{ content: '任务', status: 'pending' }])
+    expect(view).toBe('回复')
+  })
+})

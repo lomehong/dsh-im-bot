@@ -27,12 +27,18 @@ interface InflightTurn {
   toolLines: string[]
   /** Count of tool/call events (简洁 status line). */
   toolCount: number
+  /** Latest todo/write snapshot (详细 verbosity 进度). */
+  todos: Array<{ content: string; status: string }> | undefined
+  /** Cumulative input+output tokens of the turn (assistant/message.usage). */
+  usageTokens: number
   /** Set when a newer prompt superseded this turn before it settled. */
   interrupted: boolean
   /** Guards resolve/reject against double settlement. */
   ended: boolean
   /** Live progress sink; absent = final-only (tests, future callers). */
   onUpdate?: (view: string) => void
+  /** Turn-end metadata (token usage) for reply footers. */
+  onMeta?: (meta: { usageTokens: number }) => void
   mode: TurnMode
   /** Last view emitted, to skip no-op re-renders. */
   lastView: string | undefined
@@ -40,6 +46,14 @@ interface InflightTurn {
 
 /** How long a cancelled turn gets to settle before the new prompt forces through. */
 const INTERRUPT_SETTLE_TIMEOUT_MS = 8_000
+
+/** Narrow local views of harness services the driver consults dynamically. */
+interface GuardCapableTools {
+  guard(guard: (execution: Readonly<{ name: string; agent?: { id: string } }>) => string | undefined): unknown
+}
+interface MaskingLike {
+  maskTextSync?: (text: string) => { text: string }
+}
 
 /**
  * AgentDriver over the in-process harness services: one agent per bound IM
@@ -55,15 +69,22 @@ export class HarnessDriver implements AgentDriver {
   private readonly mcpRegistry: WecomMcpRegistry | undefined
   /** 访客工具白名单（设置实时读取）；决定 tools.guard 是否放行当前轮的工具调用 */
   private readonly guestTools: () => readonly string[]
-  /** 当前轮发起者（owner/guest），按会话记录，供 tools.guard 查询 */
-  private readonly turnActors = new Map<string, 'owner' | 'guest'>()
+  /** 当前轮发起者信息（角色 + userId），按会话记录；工具守卫/审批按此归因 */
+  private readonly turnInfos = new Map<string, { actor: 'owner' | 'guest'; userId: string }>()
 
   private static nextInstanceId = 0
   private readonly instanceId = ++HarnessDriver.nextInstanceId
 
   constructor(
     private readonly ctx: Context,
-    private readonly options: { cwd?: string; agentOptions?: AgentOptions; mcpRegistry?: WecomMcpRegistry; guestTools?: () => readonly string[] } = {},
+    private readonly options: {
+      cwd?: string
+      agentOptions?: AgentOptions
+      mcpRegistry?: WecomMcpRegistry
+      guestTools?: () => readonly string[]
+      /** 访客工具审批：把决策交给插件层（推卡片给 Owner、等待 IM 回复）。 */
+      onOwnerApproval?: (info: { sessionId: string; toolName: string; reason: string | undefined; guestUserId: string | undefined }) => Promise<'allowed-once' | 'rejected'> | undefined
+    } = {},
   ) {
     this.agents = ctx.agents
     this.mcpRegistry = options.mcpRegistry
@@ -79,6 +100,52 @@ export class HarnessDriver implements AgentDriver {
         disposers.clear()
       }
     }, 'im-channel.agents')
+    // P0 安全：访客工具守卫注册在【全局层】而非 agent 自有作用域——子代理
+    // 绑定的是 standing preset 作用域，继承不到父 agent 层的 guard，注册在
+    // 全局层才能覆盖子代理派生的调用。actor 通过 parentSession 链归因到根
+    // 会话；非本插件会话（如网页端）无 actor 记录，一律放行。
+    if (typeof ctx.inject === 'function') {
+      ctx.inject(['tools'], toolsCtx => {
+        const svc = (toolsCtx as unknown as { tools?: GuardCapableTools }).tools
+        if (svc === undefined || typeof svc.guard !== 'function') return
+        svc.guard(execution => {
+          const agentId = execution.agent?.id
+          if (agentId === undefined || this.actorOfAgent(agentId) !== 'guest') return undefined
+          if (matchesToolPattern(execution.name, this.guestTools())) return undefined
+          return guestToolDenied(execution.name)
+        })
+      })
+    }
+    // P1 审批：访客轮次的非白名单工具升级为 `{kind:'ask'}`，走 harness 的
+    // approval/request 瀑布线；由插件层推卡片给 Owner 回复决策。守卫仍作为
+    // 无审批服务时的 fail-closed 兜底（ask 无人应答即拒绝）。
+    // 事件名走字符串转型：与 assistant/chunk 同理，兼容未声明对应类型
+    // 合并的 dsh-tools / dsh-user-approval 版本。
+    const serviceEvents = this.ctx as unknown as {
+      on: (name: string, handler: (...args: never[]) => Promise<unknown>) => void
+    }
+    serviceEvents.on('tools/pre-execute', async (exec: Readonly<{ name: string; agent?: { id: string } }>, next: () => Promise<{ kind: 'allow' }>) => {
+      const agentId = exec.agent?.id
+      if (agentId !== undefined && this.actorOfAgent(agentId) === 'guest' && !matchesToolPattern(exec.name, this.guestTools())) {
+        return { kind: 'ask', reason: `访客请求使用工具 ${exec.name}` }
+      }
+      return await next()
+    })
+    serviceEvents.on('approval/request', async (req: { agent?: { id: string }; toolName: string; reason?: string }, next: () => Promise<'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'>): Promise<'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'> => {
+      const sessionId = req.agent?.id
+      if (sessionId === undefined || !this.owned.has(sessionId)) return await next()
+      // 只裁决访客轮次；Owner 轮次的审批交给默认链（通常直接放行）。
+      if (this.actorOfAgent(sessionId) !== 'guest') return await next()
+      const decide = this.options.onOwnerApproval
+      if (decide === undefined) return await next()
+      const info = this.turnInfos.get(sessionId)
+      try {
+        const outcome = await decide({ sessionId, toolName: req.toolName, reason: req.reason, guestUserId: info?.userId })
+        return outcome ?? 'rejected'
+      } catch {
+        return 'rejected'
+      }
+    })
     ctx.on('session/event', (session, event: SessionEvent) => {
       const record = this.owned.get(session.header.id)
       if (record === undefined || record.agent.session !== session) return
@@ -89,9 +156,21 @@ export class HarnessDriver implements AgentDriver {
           .filter(block => block.type === 'text')
           .map(block => block.type === 'text' ? block.text : '')
           .join('')
+        const usage = (event.data as { usage?: { input?: number; output?: number } }).usage
+        if (usage !== undefined) inflight.usageTokens += (usage.input ?? 0) + (usage.output ?? 0)
         if (text.length > 0) {
           inflight.messages.push(text)
           inflight.partial = ''
+          this.emitView(inflight)
+        }
+      } else if ((event.type as string) === 'todo/write') {
+        // 任务清单快照：详细模式的进度视图直接消费。
+        const todos = (event.data as { todos?: Array<{ content?: string; status?: string }> }).todos
+        if (Array.isArray(todos)) {
+          inflight.todos = todos
+            .filter(t => typeof t?.content === 'string')
+            .slice(0, 10)
+            .map(t => ({ content: String(t.content), status: String(t.status ?? 'pending') }))
           this.emitView(inflight)
         }
       } else if ((event.type as string) === 'assistant/chunk') {
@@ -169,7 +248,6 @@ export class HarnessDriver implements AgentDriver {
         if (this.mcpRegistry !== undefined) {
           await this.mcpRegistry.registerToAgent(agentCtx)
         }
-        this.mountGuestGuard(agentCtx, sessionId)
         // 注册共享记忆工具
         this.mountSharedMemory(agentCtx, options.userId, options.isMaster)
       },
@@ -224,7 +302,6 @@ export class HarnessDriver implements AgentDriver {
         if (this.mcpRegistry !== undefined) {
           await this.mcpRegistry.registerToAgent(agentCtx)
         }
-        this.mountGuestGuard(agentCtx, createOptions.sessionId)
         // 注入共享记忆（如果 dsh-memory 插件已加载）
         this.mountSharedMemory(agentCtx, userId, isMaster)
       },
@@ -235,24 +312,69 @@ export class HarnessDriver implements AgentDriver {
     await this.attachWorkspace(handle.agent.id, cwd)
   }
 
-  /** Group the session under the workspace owning its cwd, when registered. */
   /**
-   * Register the guest tool gate on one agent's scoped context: a monotonic
-   * guard (deny-only, ordering cannot re-allow) that blocks tool calls during
-   * guest-initiated turns unless the tool matches the owner-configured
-   * guestTools allowlist. Owner turns pass through untouched. The guard's
-   * layer is bound to the agent's context, so it disposes with the agent.
+   * 归因工具调用的发起角色：沿 parentSession 链回溯到根会话（子代理
+   * session.header.parentSession 指向父会话），再查 turnActors。深度上限
+   * 防御环；中途 agent 不在注册表时按已知最外层计。
    */
-  private mountGuestGuard(agentCtx: unknown, sessionId: string): void {
-    const tools = (agentCtx as { tools?: { guard(guard: (execution: Readonly<{ name: string }>) => string | undefined): unknown } }).tools
-    if (tools === undefined || typeof tools.guard !== 'function') return
-    tools.guard(execution => {
-      if (this.turnActors.get(sessionId) !== 'guest') return undefined
-      if (matchesToolPattern(execution.name, this.guestTools())) return undefined
-      return guestToolDenied(execution.name)
-    })
+  private actorOfAgent(agentId: string): 'owner' | 'guest' | undefined {
+    let id: string = agentId
+    for (let depth = 0; depth < 8; depth++) {
+      const agent = this.agents.get(id as ReturnType<typeof SessionId>) as { session?: { header: { id: string; parentSession?: string } } } | undefined
+      if (agent?.session === undefined) break
+      const parent: string | undefined = agent.session.header.parentSession
+      if (parent === undefined) {
+        id = agent.session.header.id
+        break
+      }
+      id = parent
+    }
+    return this.turnInfos.get(id)?.actor
   }
 
+  /**
+   * P0 安全：外发 IM 前的敏感信息脱敏（masking 服务存在时）。流式视图与
+   * 终稿统一走这里；服务不可用时原样返回。
+   */
+  private maskOutgoing(text: string): string {
+    const masking = this.ctx.get('masking') as MaskingLike | undefined
+    if (masking?.maskTextSync === undefined || text.length === 0) return text
+    try {
+      return masking.maskTextSync(text).text
+    } catch {
+      return text
+    }
+  }
+
+  /** Token 用量快照（/状态 展示）；token-meter 服务缺席时返回 undefined。 */
+  usageOf(sessionId: string): { totalTokens: number } | undefined {
+    const record = this.owned.get(sessionId)
+    if (record === undefined) return undefined
+    const meter = this.ctx.get('tokenMeter') as { measure?: (session: unknown) => { totalTokens: number } } | undefined
+    if (meter?.measure === undefined) return undefined
+    try {
+      return { totalTokens: meter.measure(record.agent.session).totalTokens }
+    } catch {
+      return undefined
+    }
+  }
+
+  /** 主动压缩会话（/压缩）；compaction 服务缺席或不适用时返回 false。 */
+  async compact(sessionId: string): Promise<boolean> {
+    const record = this.owned.get(sessionId)
+    if (record === undefined) return false
+    const compaction = this.ctx.get('compaction') as { compactNow?: (agent: unknown, signal: AbortSignal) => Promise<unknown> } | undefined
+    if (compaction?.compactNow === undefined) return false
+    try {
+      await compaction.compactNow(record.agent, new AbortController().signal)
+      return true
+    } catch (error) {
+      this.ctx.logger?.warn?.(`compact ${sessionId.slice(0, 8)}… 失败: ${messageOf(error)}`)
+      return false
+    }
+  }
+
+  /** Group the session under the workspace owning its cwd, when registered. */
   private async attachWorkspace(sessionId: string, cwd: string): Promise<void> {
     // Web-created sessions attach to their workspace explicitly; agents.create
     // does not, so a session here would stay in "ungrouped" even with the
@@ -381,8 +503,8 @@ export class HarnessDriver implements AgentDriver {
       }
     }
     const mode = modeOf(options.verbosity)
-    // 记录本轮发起者：tools.guard 据此决定是否对工具调用启用访客门禁。
-    if (options.actor !== undefined) this.turnActors.set(sessionId, options.actor)
+    // 记录本轮发起者：工具守卫与审批按此归因（含 userId，审批卡片展示用）。
+    this.turnInfos.set(sessionId, { actor: options.actor ?? 'owner', userId: options.userId ?? 'unknown' })
     const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
     return await new Promise<string>((resolve, reject) => {
       let settleResolve!: () => void
@@ -391,8 +513,10 @@ export class HarnessDriver implements AgentDriver {
         resolve, reject, settleResolve, settled,
         messageId: message.id, turn: undefined,
         messages: [], partial: '', toolLines: [], toolCount: 0,
+        todos: undefined, usageTokens: 0,
         interrupted: false, ended: false,
         ...(options.onUpdate !== undefined ? { onUpdate: options.onUpdate } : {}),
+        ...(options.onMeta !== undefined ? { onMeta: options.onMeta } : {}),
         mode, lastView: undefined,
       }
       record!.inflight = inflight
@@ -413,10 +537,10 @@ export class HarnessDriver implements AgentDriver {
   private emitView(inflight: InflightTurn): void {
     const sink = inflight.onUpdate
     if (sink === undefined || inflight.ended) return
-    const view = renderLive(inflight.mode, inflight.messages, inflight.toolLines, inflight.toolCount, inflight.partial)
+    const view = renderLive(inflight.mode, inflight.messages, inflight.toolLines, inflight.toolCount, inflight.partial, inflight.todos)
     if (view === inflight.lastView) return
     inflight.lastView = view
-    sink(view)
+    sink(this.maskOutgoing(view))
   }
 
   /** Resolve/reject a turn exactly once and clear its slot. */
@@ -425,13 +549,16 @@ export class HarnessDriver implements AgentDriver {
     inflight.ended = true
     if (record.inflight === inflight) record.inflight = undefined
     // 轮次结束即恢复全量工具能力（下一轮若无 actor 记录则默认放行）。
-    this.turnActors.delete(record.agent.id)
+    this.turnInfos.delete(record.agent.id)
     inflight.settleResolve()
     if (outcome.error !== undefined) {
       inflight.reject(outcome.error)
       return
     }
-    const partial = outcome.reply ?? ''
+    if (inflight.onMeta !== undefined && inflight.usageTokens > 0) {
+      try { inflight.onMeta({ usageTokens: inflight.usageTokens }) } catch { /* footer is best-effort */ }
+    }
+    const partial = this.maskOutgoing(outcome.reply ?? '')
     inflight.resolve(inflight.interrupted ? interruptedNote(partial) : partial)
   }
 }

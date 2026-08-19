@@ -6,7 +6,7 @@
  */
 
 /** Commands a guest may run, by canonical command id (see router COMMAND_ALIASES). */
-export const DEFAULT_GUEST_COMMANDS: readonly string[] = ['帮助', '状态', '回复', '停止']
+export const DEFAULT_GUEST_COMMANDS: readonly string[] = ['帮助', '状态', '回复', '停止', '全文']
 
 /**
  * Curated tool catalog for the settings UI. `pattern` is what goes into the
@@ -34,6 +34,7 @@ export const GUEST_COMMAND_CATALOG: ReadonlyArray<{ id: string; label: string }>
   { id: '状态', label: '/状态 查看当前状态' },
   { id: '回复', label: '/回复 调整个人消息详细度' },
   { id: '停止', label: '/停止 中断当前任务' },
+  { id: '全文', label: '/全文 查看被截断长回复的全文' },
 ]
 
 /**

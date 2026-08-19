@@ -24,4 +24,7 @@ export declare function renderFinal(mode: VerbosityMode, messages: readonly stri
  * partial carries the unfinalized tail assembled from assistant/chunk
  * text-delta events, so the view types out while the model generates.
  */
-export declare function renderLive(mode: VerbosityMode, messages: readonly string[], toolLines: readonly string[], toolCount: number, partial?: string): string;
+export declare function renderLive(mode: VerbosityMode, messages: readonly string[], toolLines: readonly string[], toolCount: number, partial?: string, todos?: readonly {
+    content: string;
+    status: string;
+}[] | undefined): string;

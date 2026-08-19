@@ -129,6 +129,11 @@ export class BindStore {
     isMasterFor(ref) {
         return this.findRow(ref)?.isMaster === true;
     }
+    /** Reverse lookup: which (kind, user) a session id currently belongs to. */
+    findBySession(sessionId) {
+        const row = this.rows().find(r => r.sessionId === sessionId);
+        return row === undefined ? undefined : { kind: row.kind, userId: row.userId };
+    }
     /**
      * The channel owner (digital-avatar claimant): the first isMaster row of a
      * channel kind. Everyone else on that channel is a guest riding the

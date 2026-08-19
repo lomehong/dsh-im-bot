@@ -31,6 +31,10 @@ export interface PromptOptions {
     userId?: string;
     /** 是否为绑定主人（重启恢复/兜底重建会话时用于记忆权限过滤）。 */
     isMaster?: boolean;
+    /** Turn-end metadata (token usage) for reply footers. */
+    onMeta?: (meta: {
+        usageTokens: number;
+    }) => void;
 }
 /** Per-session knobs a /新建 or /bind session can carry. */
 export interface SessionOptions {
@@ -94,6 +98,16 @@ export interface RouterDeps {
     }>>;
     /** Commands a guest may run (canonical ids); absent = DEFAULT_GUEST_COMMANDS. */
     readonly guestCommands?: () => readonly string[];
+    /** Owner-reply approval coordinator; consumes 允许/拒绝 before routing. */
+    readonly approval?: {
+        consumeOwnerReply(kind: InboundMessage['from']['kind'], ownerUserId: string, text: string): boolean;
+    };
+    /** Token usage snapshot for /状态; absent hides the context line. */
+    readonly usageOf?: (sessionId: string) => {
+        totalTokens: number;
+    } | undefined;
+    /** Manually compact a session (/压缩); absent reports unavailable. */
+    readonly compact?: (sessionId: string) => Promise<boolean>;
     /** Diagnostic sink (wired to the host logger); absent = silent. */
     readonly log?: (line: string) => void;
     /**

@@ -43,12 +43,14 @@ export function renderFinal(mode, messages, toolLines) {
  * partial carries the unfinalized tail assembled from assistant/chunk
  * text-delta events, so the view types out while the model generates.
  */
-export function renderLive(mode, messages, toolLines, toolCount, partial = '') {
+export function renderLive(mode, messages, toolLines, toolCount, partial = '', todos = undefined) {
     if (mode === 'quiet') {
         return toolCount > 0 ? `⏳ 处理中，已执行 ${toolCount} 次工具调用…` : '⏳ 已收到，正在处理…';
     }
     if (mode === 'verbose') {
         const parts = [];
+        if (todos !== undefined && todos.length > 0)
+            parts.push(todoBlock(todos), '──────────');
         if (toolLines.length > 0)
             parts.push(toolLines.join('\n'), '──────────');
         const text = liveText(messages, partial);
@@ -59,6 +61,14 @@ export function renderLive(mode, messages, toolLines, toolCount, partial = '') {
     if (text.length > 0)
         return text;
     return toolCount > 0 ? `⏳ 正在执行任务（已调用 ${toolCount} 次工具）…` : '⏳ 正在思考…';
+}
+/** Compact todo snapshot for verbose live views (in-progress marker first). */
+function todoBlock(todos) {
+    const lines = todos.map(t => {
+        const mark = t.status === 'completed' ? '☑' : t.status === 'in_progress' ? '◐' : '☐';
+        return `${mark} ${t.content}`;
+    });
+    return `📋 任务\n${lines.join('\n')}`;
 }
 /** Finalized message segments plus the streaming tail of the next one. */
 function liveText(messages, partial) {

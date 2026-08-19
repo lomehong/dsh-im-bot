@@ -1,67 +1,45 @@
 /**
- * IM-mediated tool approval bridge.
+ * IM-mediated tool approval bridge (owner-reply style).
  *
- * The harness exposes an `approval/request` waterfall for any listener that
- * wants to answer a permission prompt. This bridge makes im-channel one such
- * listener: when a tool is about to run and the harness asks for approval,
- * the bridge posts an Allow / Deny card to the bound IM user and waits for
- * the user's reply via the host-side card-callback route.
- *
- * **Status: scaffold.** The actual wiring (host-side callback route, event
- * scope subscription, handoff between waterfall decision and IM card reply)
- * depends on the harness `user-approval` service surface, which is peer-dep
- * only — no live runtime tests possible without a deployment. What is real
- * and tested here: the card-payload renderers below (`renderFeishuCard`,
- * `renderWechatCard`) and the outcome vocabulary (`ApprovalOutcome`).
+ * When a guest-initiated turn hits a tool outside the guestTools allowlist,
+ * the driver escalates through the harness `approval/request` waterfall
+ * (tools/pre-execute → {kind:'ask'}). This bridge turns that request into an
+ * IM card to the channel owner and waits for the owner's REPLY text —
+ * 允许/y/allow or 拒绝/n/deny — because Feishu card button callbacks would
+ * need a publicly reachable URL that a localhost dsh host cannot offer.
+ * Unanswered requests fail closed (rejected) after the timeout.
  */
-import type { OutboundMessage } from '../core/channel.ts';
-/** Outcome vocabulary the harness `approval/request` waterfall returns. */
-export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
-/** Per-platform submission of an approval card to one bound IM chat. */
-export interface ApprovalPromptTarget {
-    kind: 'feishu' | 'wechat';
-    /** Stable target the platform's send/openTurn accepts (chat_id / user id). */
-    targetId: string;
+/** Decision vocabulary the harness approval waterfall expects. */
+export type ApprovalDecision = 'allowed-once' | 'rejected';
+/** How long an owner has to answer before the request fails closed. */
+export declare const APPROVAL_TIMEOUT_MS = 180000;
+/** Parse an owner reply into a decision; undefined = not a decision keyword. */
+export declare function parseApprovalReply(text: string): ApprovalDecision | undefined;
+/**
+ * Per-host coordinator: at most one pending approval per channel kind (the
+ * owner answers one question at a time on their phone). The router consults
+ * consumeOwnerReply() before normal routing so 允许/拒绝 never reach the
+ * agent as chat input.
+ */
+export declare class ApprovalBridge {
+    private readonly notify;
+    private readonly log;
+    private readonly pending;
+    constructor(notify: (kind: string, ownerUserId: string, text: string) => Promise<boolean>, log?: (line: string) => void);
+    /** Whether a decision is outstanding for the channel kind. */
+    hasPending(kind: string): boolean;
+    /**
+     * Ask the channel owner to approve a guest tool call. Resolves with the
+     * owner's decision, or 'rejected' on timeout / delivery failure.
+     */
+    request(kind: string, ownerUserId: string, guestLabel: string, info: {
+        toolName: string;
+        reason: string | undefined;
+    }): Promise<ApprovalDecision>;
+    /**
+     * Router hook: when the channel owner replies while a decision is pending,
+     * consume the message as the decision. Returns true when the message was
+     * consumed (the router must stop processing it).
+     */
+    consumeOwnerReply(kind: string, ownerUserId: string, text: string): boolean;
 }
-/** Sender the bridge borrows from the channel instance. */
-export interface ApprovalPromptSender {
-    send(target: ApprovalPromptTarget, message: OutboundMessage): Promise<void>;
-}
-/** Renderer input: what the user needs to see to make the call. */
-export interface ApprovalCardModel {
-    tool: string;
-    reason: string;
-    callId: string | undefined;
-}
-/** JSON for a Feishu interactive card with Allow / Deny buttons. */
-export interface FeishuApprovalCard {
-    type: 'interactive';
-    card: {
-        schema: '2.0';
-        config: {
-            wide_screen_mode: true;
-        };
-        body: {
-            elements: Array<{
-                tag: 'markdown';
-                content: string;
-            } | {
-                tag: 'action';
-                actions: Array<unknown>;
-            }>;
-        };
-    };
-}
-/** Build a Feishu interactive card payload with two action buttons. The
- *  callback URL is host-routed (`/im-channel/approval/decide`) and carries the
- *  approval id + decision via the button value. */
-export declare function renderFeishuCard(model: ApprovalCardModel, approvalId: string): FeishuApprovalCard;
-/** Wechat has no message-editing / card primitives, so the only delivery
- *  surface is plain text. We surface the approval + a short URL that opens
- *  the harness web UI where the user can decide. */
-export declare function renderWechatCard(model: ApprovalCardModel, harnessUrl: string): string;
-/** Send one approval card through the right channel sender. */
-export declare function postApprovalCard(sender: ApprovalPromptSender, target: ApprovalPromptTarget, model: ApprovalCardModel, ctx: {
-    approvalId?: string;
-    harnessUrl?: string;
-}): Promise<void>;

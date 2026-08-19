@@ -10,6 +10,7 @@ import { WecomChannel, loadWecomCredentials } from "../channels/wecom/index.js";
 import { WecomMcpRegistry } from "../channels/wecom/wecom-mcp-registry.js";
 import { getEnabledMcpServers } from "../channels/mcp-server-manager.js";
 import { LoginApi } from "./login-api.js";
+import { ApprovalBridge } from "./approval-bridge.js";
 export const name = 'im-channel';
 export const inject = ['agents'];
 export const provide = ['im-channel'];
@@ -72,7 +73,28 @@ export function apply(ctx, config) {
     for (const server of enabledServers) {
         mcpRegistry.registerServer({ name: server.name, url: server.url });
     }
-    const driver = new HarnessDriver(ctx, { mcpRegistry, guestTools: () => current.guestTools ?? [] });
+    // 访客工具审批桥：卡片推给渠道 Owner，等待其 IM 回复（允许/拒绝），
+    // 超时 fail-closed。通知走当前 router 的 pushToUser（闭包延迟绑定）。
+    const approvalBridge = new ApprovalBridge((kind, ownerUserId, body) => {
+        const r = router;
+        if (r === undefined)
+            return Promise.resolve(false);
+        return r.pushToUser(kind, ownerUserId, body, { markdown: false });
+    }, line => { ctx.logger.info(`[im-channel] ${line}`); });
+    const driver = new HarnessDriver(ctx, {
+        mcpRegistry,
+        guestTools: () => current.guestTools ?? [],
+        onOwnerApproval: ({ sessionId, toolName, reason, guestUserId }) => {
+            const row = store.findBySession(sessionId);
+            if (row === undefined)
+                return Promise.resolve('rejected');
+            const owner = store.ownerFor(row.kind);
+            if (owner === undefined)
+                return Promise.resolve('rejected');
+            const label = guestUserId === undefined || guestUserId === 'unknown' ? row.userId.slice(0, 10) + '…' : guestUserId.slice(0, 16);
+            return approvalBridge.request(row.kind, owner.userId, label, { toolName, reason });
+        },
+    });
     // One bind store for the whole plugin lifetime (and process-shared with
     // the login HTTP API): the bound-session rows must survive router
     // rebuilds, and /bind hands out new sessions from it.
@@ -122,6 +144,11 @@ export function apply(ctx, config) {
                     return list.includes(from.userId) || list.includes(`${from.kind}:${from.userId}`);
                 },
                 guestCommands: () => current.guestCommands ?? DEFAULT_GUEST_COMMANDS,
+                approval: {
+                    consumeOwnerReply: (kind, ownerUserId, messageText) => approvalBridge.consumeOwnerReply(kind, ownerUserId, messageText),
+                },
+                usageOf: sessionId => driver.usageOf(sessionId),
+                compact: sessionId => driver.compact(sessionId),
                 status: () => {
                     const selection = ctx.get('agentDefaultModel');
                     if (selection !== undefined) {
