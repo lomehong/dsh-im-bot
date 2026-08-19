@@ -99,8 +99,11 @@ export interface RouterDeps {
   readonly efforts?: () => Array<{ id: string; name: string }> | Promise<Array<{ id: string; name: string }>>
   /** Commands a guest may run (canonical ids); absent = DEFAULT_GUEST_COMMANDS. */
   readonly guestCommands?: () => readonly string[]
-  /** Owner-reply approval coordinator; consumes 允许/拒绝 before routing. */
-  readonly approval?: { consumeOwnerReply(kind: InboundMessage['from']['kind'], ownerUserId: string, text: string): boolean }
+  /** Owner-approval coordinator: text-reply consumption + button decisions. */
+  readonly approval?: {
+    consumeOwnerReply(kind: InboundMessage['from']['kind'], ownerUserId: string, text: string): boolean
+    resolveByToken(kind: InboundMessage['from']['kind'], token: string, decision: 'allow' | 'deny', userId: string, settleCard?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>): boolean
+  }
   /** Token usage snapshot for /状态; absent hides the context line. */
   readonly usageOf?: (sessionId: string) => { totalTokens: number } | undefined
   /** Manually compact a session (/压缩); absent reports unavailable. */
@@ -178,6 +181,10 @@ export class Router {
       })
       channel.onDead?.(reason => {
         this.log(`[im-channel] ⚠️ ${channel.label} 渠道已掉线：${reason}`)
+      })
+      channel.onApprovalAction?.(action => {
+        const consumed = this.deps.approval?.resolveByToken(action.kind, action.token, action.decision, action.userId, action.settleCard) ?? false
+        if (!consumed) this.log(`[im-channel] ${channel.label} 审批按钮未匹配待决请求（token=${action.token}），忽略`)
       })
       try {
         await channel.connect()

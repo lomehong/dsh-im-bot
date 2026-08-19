@@ -36,6 +36,7 @@ describe('ApprovalBridge', () => {
     const { bridge, sent } = makeBridge()
     const decision = bridge.request('feishu', 'ou_owner', '访客甲', { toolName: 'bash', reason: '列出目录' })
     expect(bridge.hasPending('feishu')).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 10))
     expect(sent[0]?.text).toContain('bash')
     expect(sent[0]?.userId).toBe('ou_owner')
     const consumed = bridge.consumeOwnerReply('feishu', 'ou_owner', ' 允许 ')
@@ -89,5 +90,50 @@ describe('ApprovalBridge', () => {
     await expect(first).resolves.toBe('rejected')
     bridge.consumeOwnerReply('feishu', 'ou_owner', '允许')
     await expect(second).resolves.toBe('allowed-once')
+  })
+})
+
+describe('ApprovalBridge button cards', () => {
+  it('sends a token-linked card; the owner click resolves the decision', async () => {
+    const cards: Array<{ kind: string; userId: string; token: string }> = []
+    const bridge = new ApprovalBridge(
+      async () => true,
+      async (kind, userId, card) => { cards.push({ kind, userId, token: card.token }); return true },
+    )
+    const decision = bridge.request('feishu', 'ou_owner', '访客甲', { toolName: 'bash', reason: undefined })
+    // 等待卡片登记 token（异步 sendCard）
+    await new Promise(resolve => setTimeout(resolve, 10))
+    const token = cards[0]?.token
+    expect(token).toBeDefined()
+    // 非 Owner 点击被忽略
+    expect(bridge.resolveByToken('feishu', token, 'allow', 'ou_other')).toBe(false)
+    // 错渠道被忽略
+    expect(bridge.resolveByToken('wecom', token, 'allow', 'ou_owner')).toBe(false)
+    const settled: string[] = []
+    expect(bridge.resolveByToken('feishu', token, 'deny', 'ou_owner', async outcome => { settled.push(outcome) })).toBe(true)
+    await expect(decision).resolves.toBe('rejected')
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(settled).toEqual(['rejected'])
+  })
+
+  it('card and text paths race; first decision wins', async () => {
+    const bridge = new ApprovalBridge(async () => true, async () => true)
+    const decision = bridge.request('feishu', 'ou_owner', '访客甲', { toolName: 'bash', reason: undefined })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    // 卡片路径尚未点击时，Owner 文本回复 允许 也应生效并终结
+    expect(bridge.consumeOwnerReply('feishu', 'ou_owner', '允许')).toBe(true)
+    await expect(decision).resolves.toBe('allowed-once')
+    // 迟到的 token 点击不再生效
+    expect(bridge.resolveByToken('feishu', 'whatever', 'deny', 'ou_owner')).toBe(false)
+  })
+
+  it('falls back to text card when the channel cannot send cards', async () => {
+    const sent: string[] = []
+    const bridge = new ApprovalBridge(async (_k, _u, text) => { sent.push(text); return true }, async () => false)
+    const decision = bridge.request('wechat', 'wx_owner', '访客甲', { toolName: 'bash', reason: undefined })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(sent[0]).toContain('回复「允许」或「拒绝」')
+    bridge.consumeOwnerReply('wechat', 'wx_owner', 'y')
+    await expect(decision).resolves.toBe('allowed-once')
   })
 })

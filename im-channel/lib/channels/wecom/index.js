@@ -78,6 +78,8 @@ export class WecomChannel {
     static SEEN_LIMIT = 500;
     /** 死通道监听器 */
     deadHandlers = [];
+    /** 审批卡片按钮决策回调（template_card_event → 桥接层）。 */
+    approvalHandlers = [];
     /** 用于区分 SDK 端事件与我们的定时器 */
     cleanTimer;
     constructor(options = {}) {
@@ -142,6 +144,33 @@ export class WecomChannel {
             const event = data.body?.event;
             const eventKey = event && 'event_key' in event ? event.event_key : '-';
             this.log(`wecom template_card_event: user=${data.body?.from?.userid ?? '?'} key=${eventKey}`);
+            // 审批按钮回调：key 形如 approve:<token> / deny:<token>（同连接回传）。
+            if (typeof eventKey === 'string' && data.body?.from?.userid !== undefined) {
+                const match = /^(approve|deny):([a-z0-9]{4,12})$/.exec(eventKey);
+                if (match !== null) {
+                    const client = this.client;
+                    const frameHeaders = data.headers;
+                    const settleCard = async (outcome) => {
+                        if (client === null || client === undefined)
+                            return;
+                        try {
+                            await client.updateTemplateCard(frameHeaders, decidedWecomCard(outcome));
+                        }
+                        catch {
+                            // 卡片刷新失败不影响决策本身。
+                        }
+                    };
+                    for (const handler of this.approvalHandlers) {
+                        handler({
+                            kind: 'wecom',
+                            token: match[2],
+                            decision: match[1] === 'approve' ? 'allow' : 'deny',
+                            userId: data.body.from.userid,
+                            settleCard,
+                        });
+                    }
+                }
+            }
         });
         this.client.on('event.feedback_event', (data) => {
             this.log(`wecom feedback_event: user=${data.body?.from?.userid ?? '?'}`);
@@ -225,6 +254,36 @@ export class WecomChannel {
     /**
      * 发送回复：通过主动推送通道发送 Markdown 消息
      */
+    /** 发送 button_interaction 模板卡片（允许/拒绝），事件经同连接回传。 */
+    async sendApprovalCard(target, card) {
+        const client = this.client;
+        if (client === null || client === undefined)
+            return false;
+        try {
+            await client.sendMessage(target.targetId, {
+                msgtype: 'template_card',
+                template_card: {
+                    card_type: 'button_interaction',
+                    main_title: { title: '访客工具审批', desc: `工具：${card.toolName}` },
+                    sub_title_text: `访客：${card.guestLabel}${card.reason !== undefined && card.reason.length > 0 ? `
+说明：${card.reason.slice(0, 120)}` : ''}
+请选择允许或拒绝（超时自动拒绝）`,
+                    button_list: [
+                        { text: '允许', key: `approve:${card.token}`, style: 1 },
+                        { text: '拒绝', key: `deny:${card.token}`, style: 2 },
+                    ],
+                },
+            });
+            return true;
+        }
+        catch (error) {
+            this.log(`wecom 审批卡片发送失败，回退文本审批: ${error instanceof Error ? error.message : String(error)}`);
+            return false;
+        }
+    }
+    onApprovalAction(handler) {
+        this.approvalHandlers.push(handler);
+    }
     async send(target, message) {
         const client = this.client;
         if (client === undefined)
@@ -433,4 +492,13 @@ class WecomTurnSink {
             }
         }
     }
+}
+/** 审批卡片定稿态（WeCom template_card 更新体）。 */
+function decidedWecomCard(outcome) {
+    const title = outcome === 'allowed' ? '已允许（本次）' : outcome === 'rejected' ? '已拒绝' : '审批超时，自动拒绝';
+    return {
+        card_type: 'button_interaction',
+        main_title: { title: `🔐 访客工具审批 · ${title}` },
+        sub_title_text: '本审批已结束',
+    };
 }

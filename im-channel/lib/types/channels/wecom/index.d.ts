@@ -7,7 +7,7 @@
  * 消息流：SDK WebSocket 回调 → 标准化为 InboundMessage → 路由到 DSH agent
  * 回复流：agent 回复 → replyStream 流式推送（打字机效果）
  */
-import type { ImChannel, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../../core/channel.ts';
+import type { ApprovalAction, ApprovalCardRequest, ImChannel, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../../core/channel.ts';
 /** 通道凭证持久化路径：~/.dsh/im-channel/credentials/wecom.json */
 export interface WecomCredentials {
     botId: string;
@@ -45,6 +45,8 @@ export declare class WecomChannel implements ImChannel {
     private static readonly SEEN_LIMIT;
     /** 死通道监听器 */
     private deadHandlers;
+    /** 审批卡片按钮决策回调（template_card_event → 桥接层）。 */
+    private approvalHandlers;
     /** 用于区分 SDK 端事件与我们的定时器 */
     private cleanTimer;
     constructor(options?: WecomChannelOptions);
@@ -63,6 +65,9 @@ export declare class WecomChannel implements ImChannel {
     /**
      * 发送回复：通过主动推送通道发送 Markdown 消息
      */
+    /** 发送 button_interaction 模板卡片（允许/拒绝），事件经同连接回传。 */
+    sendApprovalCard(target: ReplyTarget, card: ApprovalCardRequest): Promise<boolean>;
+    onApprovalAction(handler: (action: ApprovalAction) => void): void;
     send(target: ReplyTarget, message: OutboundMessage): Promise<void>;
     /**
      * 打开流式回合：使用 replyStream 实现打字机效果

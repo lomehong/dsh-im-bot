@@ -98,9 +98,10 @@ export interface RouterDeps {
     }>>;
     /** Commands a guest may run (canonical ids); absent = DEFAULT_GUEST_COMMANDS. */
     readonly guestCommands?: () => readonly string[];
-    /** Owner-reply approval coordinator; consumes 允许/拒绝 before routing. */
+    /** Owner-approval coordinator: text-reply consumption + button decisions. */
     readonly approval?: {
         consumeOwnerReply(kind: InboundMessage['from']['kind'], ownerUserId: string, text: string): boolean;
+        resolveByToken(kind: InboundMessage['from']['kind'], token: string, decision: 'allow' | 'deny', userId: string, settleCard?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>): boolean;
     };
     /** Token usage snapshot for /状态; absent hides the context line. */
     readonly usageOf?: (sessionId: string) => {

@@ -88,6 +88,23 @@ export interface TurnSink {
     /** The turn failed; message is already user-facing. */
     fail(message: string): Promise<void>;
 }
+/** One button-based approval card request; token links clicks back to the bridge. */
+export interface ApprovalCardRequest {
+    readonly token: string;
+    readonly guestLabel: string;
+    readonly toolName: string;
+    readonly reason: string | undefined;
+}
+/** A button decision delivered by a channel's card-callback path. */
+export interface ApprovalAction {
+    readonly kind: ChannelKind;
+    readonly token: string;
+    readonly decision: 'allow' | 'deny';
+    /** The clicking user (verified against the channel owner by the bridge). */
+    readonly userId: string;
+    /** Best-effort card finalization (mark decided/timeout on the card). */
+    readonly settleCard?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>;
+}
 /**
  * One IM platform adapter. A capability-seam style interface: each platform
  * implements connect/onMessage/send/login; routing and binding are shared
@@ -119,6 +136,15 @@ export interface ImChannel {
      * protocol state). Optional; the router logs these loudly.
      */
     onDead?(handler: (reason: string) => void): void;
+    /**
+     * Send a button-based approval card (guest tool gate). The card carries a
+     * token; the decision comes back through onApprovalAction on the same
+     * connection. Returning false (or omitting the method) falls back to the
+     * text-reply approval flow.
+     */
+    sendApprovalCard?(target: ReplyTarget, card: ApprovalCardRequest): Promise<boolean>;
+    /** Deliver button decisions from approval cards back to the router. */
+    onApprovalAction?(handler: (action: ApprovalAction) => void): void;
     /** Release the connection; no further handler invocations after resolve. */
     stop(): Promise<void>;
 }

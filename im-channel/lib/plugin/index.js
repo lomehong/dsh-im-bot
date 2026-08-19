@@ -75,11 +75,29 @@ export function apply(ctx, config) {
     }
     // 访客工具审批桥：卡片推给渠道 Owner，等待其 IM 回复（允许/拒绝），
     // 超时 fail-closed。通知走当前 router 的 pushToUser（闭包延迟绑定）。
+    // 审批卡片走渠道能力（飞书 interactive / 企微 template_card），
+    // 按钮经同一条长连接回传；文本兜底只在卡片不可达时使用。
+    const ownerTargetOf = (kind, ownerUserId) => {
+        const targetId = store.targetIdFor({ kind: kind, userId: ownerUserId });
+        return targetId === undefined ? undefined : { kind: kind, targetId };
+    };
+    const channelOf = (kind) => router?.channels.find(c => c.kind === kind);
     const approvalBridge = new ApprovalBridge((kind, ownerUserId, body) => {
         const r = router;
         if (r === undefined)
             return Promise.resolve(false);
         return r.pushToUser(kind, ownerUserId, body, { markdown: false });
+    }, async (kind, ownerUserId, card) => {
+        const channel = channelOf(kind);
+        const target = ownerTargetOf(kind, ownerUserId);
+        if (channel?.sendApprovalCard === undefined || target === undefined)
+            return false;
+        try {
+            return await channel.sendApprovalCard(target, { ...card, reason: card.reason });
+        }
+        catch {
+            return false;
+        }
     }, line => { ctx.logger.info(`[im-channel] ${line}`); });
     const driver = new HarnessDriver(ctx, {
         mcpRegistry,
@@ -146,6 +164,7 @@ export function apply(ctx, config) {
                 guestCommands: () => current.guestCommands ?? DEFAULT_GUEST_COMMANDS,
                 approval: {
                     consumeOwnerReply: (kind, ownerUserId, messageText) => approvalBridge.consumeOwnerReply(kind, ownerUserId, messageText),
+                    resolveByToken: (kind, token, decision, userId, settleCard) => approvalBridge.resolveByToken(kind, token, decision, userId, settleCard),
                 },
                 usageOf: sessionId => driver.usageOf(sessionId),
                 compact: sessionId => driver.compact(sessionId),

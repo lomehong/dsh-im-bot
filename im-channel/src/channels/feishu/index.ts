@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import * as Lark from '@larksuiteoapi/node-sdk'
-import type { ImChannel, ImUserId, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../../core/channel.ts'
+import type { ApprovalAction, ApprovalCardRequest, ImChannel, ImUserId, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../../core/channel.ts'
 
 /** Channel credentials persisted at ~/.dsh/im-channel/credentials/feishu.json. */
 export interface FeishuCredentials {
@@ -62,6 +62,8 @@ export class FeishuChannel implements ImChannel {
   readonly label = '飞书'
 
   private handler: ((message: InboundMessage) => void) | undefined
+  /** 审批卡片按钮决策回调（card.action.trigger → 桥接层）。 */
+  private approvalHandlers: Array<(action: ApprovalAction) => void> = []
   private client: Lark.Client | undefined
   private wsClient: Lark.WSClient | undefined
 
@@ -90,6 +92,11 @@ export class FeishuChannel implements ImChannel {
           'im.message.receive_v1': (data) => {
             this.dispatch(data as ReceiveMessageEvent)
             return Promise.resolve()
+          },
+          // 审批卡片按钮回调：走同一条长连接，无需公网回调地址。
+          'card.action.trigger': (data: unknown) => {
+            this.onCardAction(data as Record<string, unknown>)
+            return Promise.resolve({})
           },
         }),
       } as Parameters<Lark.WSClient['start']>[0])
@@ -148,6 +155,52 @@ export class FeishuChannel implements ImChannel {
     const sink = new FeishuTurnSink(client, target, line => this.log(line))
     await sink.start(options.mode)
     return sink
+  }
+
+  /** 发送带 允许/拒绝 按钮的审批卡片（schema 1.0 interactive；value 携带 token）。 */
+  async sendApprovalCard(target: ReplyTarget, card: ApprovalCardRequest): Promise<boolean> {
+    if (this.client === undefined) return false
+    try {
+      const resp = await this.client.im.v1.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: { receive_id: target.targetId, msg_type: 'interactive', content: approvalCardJson(card) },
+      })
+      assertOk(resp, 'feishu approval card')
+      return true
+    } catch (error) {
+      this.log(`feishu 审批卡片发送失败，回退文本审批: ${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
+  }
+
+  onApprovalAction(handler: (action: ApprovalAction) => void): void {
+    this.approvalHandlers.push(handler)
+  }
+
+  /** card.action.trigger 载荷 → ApprovalAction（value 内嵌 token 与决策）。 */
+  private onCardAction(data: Record<string, unknown>): void {
+    const action = (data.action ?? {}) as { value?: Record<string, unknown> }
+    const value = action.value ?? {}
+    const token = typeof value.im_approval === 'string' ? value.im_approval : undefined
+    const decision = value.decision === 'allow' || value.decision === 'deny' ? value.decision : undefined
+    const operator = (data.operator ?? {}) as { open_id?: string }
+    if (token === undefined || decision === undefined || operator.open_id === undefined) return
+    const messageId = typeof (data.open_message_id as unknown) === 'string' ? (data.open_message_id as string) : undefined
+    const settleCard = async (outcome: 'allowed' | 'rejected' | 'timeout'): Promise<void> => {
+      if (this.client === undefined || messageId === undefined) return
+      try {
+        const resp = await this.client.im.v1.message.patch({
+          path: { message_id: messageId },
+          data: { content: markdownCard(outcomeText(outcome)) },
+        })
+        assertOk(resp, 'feishu approval card settle')
+      } catch {
+        // 卡片刷新失败不影响决策本身。
+      }
+    }
+    for (const handler of this.approvalHandlers) {
+      handler({ kind: 'feishu', token, decision, userId: operator.open_id, settleCard })
+    }
   }
 
   async stop(): Promise<void> {
@@ -497,6 +550,37 @@ function streamingCard(content: string): string {
       update_multi: true,
     },
     body: { elements: [{ tag: 'markdown', content, element_id: STREAM_ELEMENT_ID }] },
+  })
+}
+
+/** 审批卡片定稿文案。 */
+function outcomeText(outcome: 'allowed' | 'rejected' | 'timeout'): string {
+  if (outcome === 'allowed') return '✅ 已允许（本次）'
+  if (outcome === 'rejected') return '🚫 已拒绝'
+  return '⏱ 审批超时，已自动拒绝'
+}
+
+/** Build the approval card: markdown body + 允许/拒绝 buttons carrying the token. */
+function approvalCardJson(card: ApprovalCardRequest): string {
+  const lines = [
+    '**🔐 访客工具审批**',
+    `- 访客：${card.guestLabel}`,
+    `- 工具：**${card.toolName}**`,
+    ...(card.reason !== undefined && card.reason.length > 0 ? [`- 说明：${card.reason.slice(0, 200)}`] : []),
+  ]
+  const button = (text: string, style: string, decision: 'allow' | 'deny'): Record<string, unknown> => ({
+    tag: 'button',
+    text: { tag: 'plain_lark_md', content: text },
+    type: style,
+    value: { im_approval: card.token, decision },
+  })
+  return JSON.stringify({
+    config: { wide_screen_mode: true },
+    elements: [
+      { tag: 'markdown', content: lines.join('\n') },
+      { tag: 'action', actions: [button('✅ 允许', 'primary', 'allow'), button('🚫 拒绝', 'danger', 'deny')] },
+      { tag: 'note', elements: [{ tag: 'plain_text', content: '点击按钮即决策；超时自动拒绝' }] },
+    ],
   })
 }
 

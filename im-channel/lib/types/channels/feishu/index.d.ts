@@ -11,7 +11,7 @@
  * updated via message.patch, then to a text message edited via
  * message.update.
  */
-import type { ImChannel, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../../core/channel.ts';
+import type { ApprovalAction, ApprovalCardRequest, ImChannel, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../../core/channel.ts';
 /** Channel credentials persisted at ~/.dsh/im-channel/credentials/feishu.json. */
 export interface FeishuCredentials {
     appId: string;
@@ -28,6 +28,8 @@ export declare class FeishuChannel implements ImChannel {
     readonly kind: "feishu";
     readonly label = "\u98DE\u4E66";
     private handler;
+    /** 审批卡片按钮决策回调（card.action.trigger → 桥接层）。 */
+    private approvalHandlers;
     private client;
     private wsClient;
     constructor(options?: FeishuChannelOptions);
@@ -46,6 +48,11 @@ export declare class FeishuChannel implements ImChannel {
     openTurn(target: ReplyTarget, options: {
         mode: TurnMode;
     }): Promise<TurnSink>;
+    /** 发送带 允许/拒绝 按钮的审批卡片（schema 1.0 interactive；value 携带 token）。 */
+    sendApprovalCard(target: ReplyTarget, card: ApprovalCardRequest): Promise<boolean>;
+    onApprovalAction(handler: (action: ApprovalAction) => void): void;
+    /** card.action.trigger 载荷 → ApprovalAction（value 内嵌 token 与决策）。 */
+    private onCardAction;
     stop(): Promise<void>;
     private dispatch;
 }

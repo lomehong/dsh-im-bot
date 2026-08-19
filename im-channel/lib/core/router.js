@@ -40,6 +40,11 @@ export class Router {
             channel.onDead?.(reason => {
                 this.log(`[im-channel] ⚠️ ${channel.label} 渠道已掉线：${reason}`);
             });
+            channel.onApprovalAction?.(action => {
+                const consumed = this.deps.approval?.resolveByToken(action.kind, action.token, action.decision, action.userId, action.settleCard) ?? false;
+                if (!consumed)
+                    this.log(`[im-channel] ${channel.label} 审批按钮未匹配待决请求（token=${action.token}），忽略`);
+            });
             try {
                 await channel.connect();
             }
