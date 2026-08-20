@@ -34,7 +34,21 @@ curl -fsSL https://raw.githubusercontent.com/lomehong/dsh-im-bot/main/install.mj
 
 （Windows PowerShell：`irm https://raw.githubusercontent.com/lomehong/dsh-im-bot/main/install.mjs | node -`）
 
-脚本会自动写入 web profile、安装两个包并注册 bundle，可重复执行（用于升级）。完成后重启 `dsh web` 即可。
+脚本会自动写入 web profile、安装两个包并注册 bundle，可重复执行（用于升级）。默认从
+npm 安装稳定版（`@dsh-extra/im-channel`），npm 未发布时自动回退 GitHub 源；
+`DSH_IM_SOURCE=git` 可强制走源码。完成后重启 `dsh web` 即可。
+
+<details>
+<summary>npm 源直接安装（发布后推荐）</summary>
+
+```sh
+cd ~/.dsh/profiles/web && pnpm add -w @dsh-extra/im-channel @dsh-extra/dsh-client-ui-settings-im
+```
+
+发布流程（维护者）：`cd im-channel && pnpm build && npm publish`，`ui-settings-im` 同理；
+发布前确认 `lib/` 为最新构建。
+
+</details>
 
 重启后终端出现下面的日志，说明插件加载成功、渠道已连接（未配置凭证的渠道自动跳过）：
 
@@ -75,7 +89,7 @@ cd ~/.dsh/profiles/web && pnpm add \
 1. 打开网页 → 设置 → 插件 → **手机连接**。
 2. 接入渠道（三选一或多选）：
    - **飞书 / 微信**：点对应卡片，用手机扫码（二维码可点击刷新）；
-   - **企业微信**：点卡片后填写 BotID 与 Secret（在[企业微信智能机器人](https://open.work.weixin.qq.com/)后台创建）。
+   - **企业微信**：点卡片后**用企业微信 App 扫码，一键创建智能机器人并自动完成配置**；也可展开「手动配置」填写已有机器人的 BotID 与 Secret。
 3. 在 IM 里对机器人发送 `/bind` **认领分身**（只有 Owner 需要这一步），再发 `/项目` 选择工作区。
 4. 其他人**什么都不用做**，直接发消息即可与你的数字分身对话。
 
@@ -88,6 +102,9 @@ cd ~/.dsh/profiles/web && pnpm add \
 - **访客权限**：Owner 在「设置 → 插件 → 手机连接 → 访客权限」中配置访客可用的**工具**（默认全部禁用，纯对话）与**命令**（默认 帮助/状态/回复/停止/全文）；工具白名单支持精确名与前缀通配（如 `fs*`、`mcp__wecom*`），保存后下一轮对话即生效
 - **工具审批**：访客请求白名单外的工具时，机器人向 Owner 推送**带按钮的审批卡片**——飞书（interactive 卡片 + `card.action.trigger` 长连接回调）、企业微信（button_interaction 模板卡片 + `template_card_event` 回传），**点一下「允许/拒绝」即决策**，卡片自动定稿；点击或文本回复（允许/拒绝）任一生效，3 分钟超时自动拒绝；微信等无卡片渠道自动退化为文本回复；守卫全局注册并按 parentSession 归因到根会话，**子代理派生的调用同样受控**
 - **外发脱敏**：发往 IM 的内容（含流式增量与终稿）先经 harness masking 服务脱敏，敏感信息不落第三方 IM
+- **图片输入**：飞书/企业微信里直接发图（PNG/JPEG/WebP/GIF，单张 ≤5MB，每轮 ≤3 张）给分身做视觉理解，可附文字说明
+- **交互式提问**：agent 需要补充信息时，问题以编号选项列表推到 IM，回复序号/文字/自定义内容即作答（多选用逗号分隔）
+- **补充指令**：任务运行中发送 `/补充 <指令>` 可向当前任务追加要求而不打断它
 - **所有权交接**：Owner 发送 `/unbind` 释放渠道，下一个 `/bind` 者成为新 Owner
 
 ### 流式回复与打断
@@ -118,6 +135,7 @@ cd ~/.dsh/profiles/web && pnpm add \
 | `/停止` | 访客可用 | 中断分身正在执行的任务 |
 | `/全文 <编号>` | 访客可用 | 取回被截断长回复的全文（超长回复自动落盘，先发预览） |
 | `/压缩` | Owner | 主动压缩会话上下文（`/状态` 可查看 token 水位） |
+| `/补充 <指令>` | 访客可用 | 向运行中的任务追加指令（不打断） |
 | `/状态` | 访客可用 | 查看工作区、模型、分身会话与自己的身份 |
 | `/帮助` | 访客可用 | 命令列表 |
 

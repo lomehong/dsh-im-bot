@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { WSClient, DefaultLogger } from '@wecom/aibot-node-sdk';
+import { sniffImageMediaType } from "../../core/channel.js";
 function credentialsPath() {
     return join(homedir(), '.dsh', 'im-channel', 'credentials', 'wecom.json');
 }
@@ -191,6 +192,36 @@ export class WecomChannel {
         // 重新连接（connect() 会从文件读取最新凭证）
         await this.connect();
     }
+    /** 下载企微图片（URL 5 分钟有效；长连接模式返回 AES 加密数据需解密）。 */
+    async dispatchImage(body, url, aeskey) {
+        try {
+            const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+            if (!response.ok)
+                throw new Error(`HTTP ${response.status}`);
+            let buffer = Buffer.from(await response.arrayBuffer());
+            if (buffer.byteLength > 6 * 1024 * 1024)
+                throw new Error('图片超过大小限制');
+            if (aeskey !== undefined && aeskey.length > 0) {
+                const { decryptFile } = await import('@wecom/aibot-node-sdk');
+                buffer = decryptFile(buffer, aeskey);
+            }
+            const bytes = new Uint8Array(buffer);
+            const mediaType = sniffImageMediaType(bytes);
+            if (mediaType === undefined)
+                throw new Error('无法识别图片格式');
+            this.handler?.({
+                from: { kind: 'wecom', userId: body.from.userid },
+                text: '',
+                messageId: body.msgid,
+                ...(body.chatid !== undefined ? { chatId: body.chatid } : {}),
+                ...(body.chattype === 'group' ? { mentioned: true } : {}),
+                images: [{ bytes, mediaType }],
+            });
+        }
+        catch (error) {
+            this.log(`wecom 图片消息处理失败: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
     onMessage(handler) {
         this.handler = handler;
     }
@@ -223,6 +254,15 @@ export class WecomChannel {
         const targetId = targetIdFromMessage(body);
         this.latestReqId.set(targetId, data.headers.req_id);
         const text = textFromMessage(body);
+        // 图片消息：异步下载（必要时 AES 解密）后作为带图消息路由。
+        if (body.msgtype === 'image') {
+            const imageBody = body;
+            const imageUrl = imageBody.image?.url;
+            if (typeof imageUrl === 'string' && imageUrl.length > 0) {
+                void this.dispatchImage(body, imageUrl, imageBody.image?.aeskey);
+            }
+            return;
+        }
         // 只处理文本消息（含语音转文字），跳过其他类型
         if (text.length === 0)
             return;

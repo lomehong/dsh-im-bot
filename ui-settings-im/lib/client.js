@@ -32,7 +32,7 @@ __export(index_exports, {
 module.exports = __toCommonJS(index_exports);
 
 // src/client/BotChannelTab.tsx
-var import_react3 = require("react");
+var import_react4 = require("react");
 
 // src/client/platform-marks.tsx
 var import_jsx_runtime = require("react/jsx-runtime");
@@ -1798,6 +1798,7 @@ function PassphraseCard({ t }) {
 }
 
 // src/client/WecomConfigPanel.tsx
+var import_react = require("react");
 var import_jsx_runtime5 = require("react/jsx-runtime");
 var formFieldStyle = {
   width: "100%",
@@ -1815,7 +1816,72 @@ var submitButtonStyle = {
   borderRadius: "4px",
   cursor: "pointer"
 };
+var linkStyle = {
+  background: "none",
+  border: "none",
+  color: "#2A9D8F",
+  cursor: "pointer",
+  padding: "4px 0",
+  textDecoration: "underline",
+  fontSize: "13px"
+};
 function WecomConfigPanel({ onConfigured, onError }) {
+  const [qrUrl, setQrUrl] = (0, import_react.useState)(void 0);
+  const [polling, setPolling] = (0, import_react.useState)(false);
+  const [showManual, setShowManual] = (0, import_react.useState)(false);
+  const scodeRef = (0, import_react.useRef)(void 0);
+  const timerRef = (0, import_react.useRef)(void 0);
+  const stopPolling = (0, import_react.useCallback)(() => {
+    if (timerRef.current !== void 0) {
+      clearInterval(timerRef.current);
+      timerRef.current = void 0;
+    }
+    setPolling(false);
+  }, []);
+  const startQr = (0, import_react.useCallback)(async () => {
+    stopPolling();
+    try {
+      const resp = await fetch("/im-channel/wecom/qr/start");
+      const data = await resp.json();
+      if (!data.ok || data.qrUrl === void 0) {
+        onError(`\u626B\u7801\u670D\u52A1\u4E0D\u53EF\u7528\uFF1A${data.error ?? "\u672A\u77E5\u9519\u8BEF"}\u3002\u53EF\u4F7F\u7528\u4E0B\u65B9\u624B\u52A8\u914D\u7F6E\u3002`);
+        setShowManual(true);
+        return;
+      }
+      scodeRef.current = data.scode;
+      setQrUrl(data.qrUrl);
+      setPolling(true);
+      const interval = Math.max(2e3, data.pollIntervalMs ?? 3e3);
+      timerRef.current = window.setInterval(() => {
+        void pollQr();
+      }, interval);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  }, [stopPolling]);
+  const pollQr = (0, import_react.useCallback)(async () => {
+    const scode = scodeRef.current;
+    if (scode === void 0) return;
+    try {
+      const resp = await fetch(`/im-channel/wecom/qr/status?scode=${encodeURIComponent(scode)}`);
+      const data = await resp.json();
+      if (data.ok && data.status === "confirmed") {
+        stopPolling();
+        onConfigured();
+        return;
+      }
+      if (data.ok && (data.status === "expired" || data.status === "failed")) {
+        stopPolling();
+        onError("\u626B\u7801\u5DF2\u8FC7\u671F\u6216\u5931\u8D25\uFF0C\u8BF7\u70B9\u51FB\u4E8C\u7EF4\u7801\u91CD\u8BD5\uFF0C\u6216\u4F7F\u7528\u624B\u52A8\u914D\u7F6E\u3002");
+      }
+    } catch {
+    }
+  }, [stopPolling, onConfigured]);
+  (0, import_react.useEffect)(() => {
+    return () => {
+      if (timerRef.current !== void 0) clearInterval(timerRef.current);
+    };
+  }, []);
   const submitBotConfig = async (e) => {
     e.preventDefault();
     const form = e.currentTarget;
@@ -1838,19 +1904,42 @@ function WecomConfigPanel({ onConfigured, onError }) {
       onError(err instanceof Error ? err.message : String(err));
     }
   };
-  return /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { className: BotChannelTab_default.qrPanel, children: /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { style: { padding: "16px", width: "100%" }, children: /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("form", { onSubmit: (e) => {
-    void submitBotConfig(e);
-  }, children: [
-    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("label", { style: { display: "block", marginBottom: "8px", fontWeight: "600" }, children: "BotID" }),
-    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("input", { type: "text", name: "botId", placeholder: "AIBOTID_xxxxxxxx", style: formFieldStyle }),
-    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("label", { style: { display: "block", marginBottom: "8px", fontWeight: "600" }, children: "Secret" }),
-    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("input", { type: "password", name: "secret", placeholder: "\u8F93\u5165 Secret", style: formFieldStyle }),
-    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { type: "submit", style: submitButtonStyle, children: "\u4FDD\u5B58\u914D\u7F6E" })
-  ] }) }) });
+  return /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("div", { className: BotChannelTab_default.qrPanel, children: /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { style: { padding: "16px", width: "100%" }, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { style: { margin: "0 0 12px", fontSize: "13px", color: "#666" }, children: "\u7528\u4F01\u4E1A\u5FAE\u4FE1 App \u626B\u7801\uFF0C\u4E00\u952E\u521B\u5EFA\u667A\u80FD\u673A\u5668\u4EBA\u5E76\u81EA\u52A8\u5B8C\u6210\u914D\u7F6E\u3002" }),
+    qrUrl !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { style: { textAlign: "center", marginBottom: "8px" }, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+        "img",
+        {
+          src: `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(qrUrl)}`,
+          alt: "\u4F01\u4E1A\u5FAE\u4FE1\u626B\u7801\u521B\u5EFA\u673A\u5668\u4EBA",
+          style: { width: 240, height: 240, cursor: "pointer" },
+          onClick: () => {
+            void startQr();
+          }
+        }
+      ),
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { style: { margin: "6px 0 0", fontSize: "12px", color: polling ? "#2A9D8F" : "#999" }, children: polling ? "\u7B49\u5F85\u626B\u7801\u786E\u8BA4\u2026\uFF08\u70B9\u51FB\u4E8C\u7EF4\u7801\u5237\u65B0\uFF09" : "\u70B9\u51FB\u4E8C\u7EF4\u7801\u91CD\u65B0\u751F\u6210" })
+    ] }),
+    qrUrl === void 0 && /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { type: "button", style: submitButtonStyle, onClick: () => {
+      void startQr();
+    }, children: "\u751F\u6210\u626B\u7801\u4E8C\u7EF4\u7801" }),
+    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { type: "button", style: { ...linkStyle, display: "block", margin: "8px 0" }, onClick: () => {
+      setShowManual((v) => !v);
+    }, children: showManual ? "\u6536\u8D77\u624B\u52A8\u914D\u7F6E" : "\u5DF2\u6709\u673A\u5668\u4EBA\uFF1F\u624B\u52A8\u586B\u5199 BotID / Secret" }),
+    showManual && /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("form", { onSubmit: (e) => {
+      void submitBotConfig(e);
+    }, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("label", { style: { display: "block", marginBottom: "8px", fontWeight: "600" }, children: "BotID" }),
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("input", { type: "text", name: "botId", placeholder: "AIBOTID_xxxxxxxx", style: formFieldStyle }),
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("label", { style: { display: "block", marginBottom: "8px", fontWeight: "600" }, children: "Secret" }),
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("input", { type: "password", name: "secret", placeholder: "\u8F93\u5165 Secret", style: formFieldStyle }),
+      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { type: "submit", style: submitButtonStyle, children: "\u4FDD\u5B58\u914D\u7F6E" })
+    ] })
+  ] }) });
 }
 
 // src/client/McpServersPanel.tsx
-var import_react = require("react");
+var import_react2 = require("react");
 var import_jsx_runtime6 = require("react/jsx-runtime");
 var formFieldStyle2 = {
   width: "100%",
@@ -1872,18 +1961,18 @@ var btnStyle = {
 var smallBtn = { ...btnStyle, padding: "4px 10px", fontSize: "12px" };
 var dangerBtn = { ...smallBtn, backgroundColor: "#E76F51" };
 function McpServersPanel() {
-  const [servers, setServers] = (0, import_react.useState)([]);
-  const [newName, setNewName] = (0, import_react.useState)("");
-  const [newType, setNewType] = (0, import_react.useState)("streamable-http");
-  const [newUrl, setNewUrl] = (0, import_react.useState)("");
-  const [status, setStatus] = (0, import_react.useState)(void 0);
+  const [servers, setServers] = (0, import_react2.useState)([]);
+  const [newName, setNewName] = (0, import_react2.useState)("");
+  const [newType, setNewType] = (0, import_react2.useState)("streamable-http");
+  const [newUrl, setNewUrl] = (0, import_react2.useState)("");
+  const [status, setStatus] = (0, import_react2.useState)(void 0);
   const loadServers = () => {
     fetch("/im-channel/mcp-servers").then((r) => r.json()).then((data) => {
       if (data.ok) setServers(data.servers);
     }).catch(() => {
     });
   };
-  (0, import_react.useEffect)(loadServers, []);
+  (0, import_react2.useEffect)(loadServers, []);
   const addServer = async () => {
     if (!newName.trim() || !newUrl.trim()) return;
     try {
@@ -1974,17 +2063,17 @@ function McpServersPanel() {
 }
 
 // src/client/GuestPermissionsPanel.tsx
-var import_react2 = require("react");
+var import_react3 = require("react");
 var import_jsx_runtime7 = require("react/jsx-runtime");
 var KIND_LABELS = { wechat: "\u5FAE\u4FE1", feishu: "\u98DE\u4E66", wecom: "\u4F01\u4E1A\u5FAE\u4FE1" };
 function GuestPermissionsPanel() {
-  const [data, setData] = (0, import_react2.useState)(void 0);
-  const [tools, setTools] = (0, import_react2.useState)([]);
-  const [commands, setCommands] = (0, import_react2.useState)([]);
-  const [custom, setCustom] = (0, import_react2.useState)("");
-  const [saving, setSaving] = (0, import_react2.useState)(false);
-  const [message, setMessage] = (0, import_react2.useState)("");
-  const load = (0, import_react2.useCallback)(async () => {
+  const [data, setData] = (0, import_react3.useState)(void 0);
+  const [tools, setTools] = (0, import_react3.useState)([]);
+  const [commands, setCommands] = (0, import_react3.useState)([]);
+  const [custom, setCustom] = (0, import_react3.useState)("");
+  const [saving, setSaving] = (0, import_react3.useState)(false);
+  const [message, setMessage] = (0, import_react3.useState)("");
+  const load = (0, import_react3.useCallback)(async () => {
     try {
       const resp = await fetch("/im-channel/guest-permissions");
       const payload = await resp.json();
@@ -1999,7 +2088,7 @@ function GuestPermissionsPanel() {
       setMessage(err instanceof Error ? err.message : String(err));
     }
   }, []);
-  (0, import_react2.useEffect)(() => {
+  (0, import_react3.useEffect)(() => {
     void load();
   }, [load]);
   const toggle = (list, value) => list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
@@ -2122,7 +2211,7 @@ var KIND_LABELS2 = {
   feishu: "\u98DE\u4E66",
   wecom: "\u4F01\u4E1A\u5FAE\u4FE1"
 };
-function BindingsTable({ bindings, t, onRemove }) {
+function BindingsTable({ bindings, t, onRemove, onTest }) {
   return /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: BotChannelTab_default.bindings, children: [
     /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("h3", { className: BotChannelTab_default.bindingsTitle, children: [
       t("bindings.title"),
@@ -2142,9 +2231,14 @@ function BindingsTable({ bindings, t, onRemove }) {
         /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: BotChannelTab_default.bindingKind, children: KIND_LABELS2[row.kind] ?? row.kind }) }),
         /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("td", { className: BotChannelTab_default.bindingSession, children: row.sessionId }),
         /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("td", { children: row.boundAt.replace("T", " ").slice(0, 19) }),
-        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("button", { type: "button", className: BotChannelTab_default.bindingRemove, onClick: () => {
-          onRemove(row);
-        }, children: t("bindings.remove") }) })
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("td", { children: [
+          onTest !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("button", { type: "button", className: BotChannelTab_default.bindingRemove, style: { marginRight: "8px" }, onClick: () => {
+            onTest?.(row);
+          }, children: "\u6D4B\u8BD5" }),
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("button", { type: "button", className: BotChannelTab_default.bindingRemove, onClick: () => {
+            onRemove(row);
+          }, children: t("bindings.remove") })
+        ] })
       ] }, `${row.kind}:${row.sessionId}:${index}`)) })
     ] })
   ] });
@@ -2162,13 +2256,13 @@ var CARD_MARKS = {
 function BotChannelTab(props) {
   const t = props.t;
   if (t === void 0) return null;
-  const [selected, setSelected] = (0, import_react3.useState)(void 0);
-  const [login, setLogin] = (0, import_react3.useState)(void 0);
-  const [startError, setStartError] = (0, import_react3.useState)(void 0);
-  const [bindings, setBindings] = (0, import_react3.useState)([]);
-  const [active, setActive] = (0, import_react3.useState)(typeof document === "undefined" || !document.hidden);
-  const loginPollTimer = (0, import_react3.useRef)(void 0);
-  const bindingsPollTimer = (0, import_react3.useRef)(void 0);
+  const [selected, setSelected] = (0, import_react4.useState)(void 0);
+  const [login, setLogin] = (0, import_react4.useState)(void 0);
+  const [startError, setStartError] = (0, import_react4.useState)(void 0);
+  const [bindings, setBindings] = (0, import_react4.useState)([]);
+  const [active, setActive] = (0, import_react4.useState)(typeof document === "undefined" || !document.hidden);
+  const loginPollTimer = (0, import_react4.useRef)(void 0);
+  const bindingsPollTimer = (0, import_react4.useRef)(void 0);
   const refreshBindings = async () => {
     try {
       const response = await fetch("/im-channel/bindings");
@@ -2201,7 +2295,7 @@ function BotChannelTab(props) {
     clearInterval(bindingsPollTimer.current);
     bindingsPollTimer.current = void 0;
   };
-  (0, import_react3.useEffect)(() => {
+  (0, import_react4.useEffect)(() => {
     void refreshBindings();
     selectCard("wechat");
     startBindingsPolling();
@@ -2327,6 +2421,21 @@ function BotChannelTab(props) {
         t,
         onRemove: (row) => {
           void removeBinding(row);
+        },
+        onTest: (row) => {
+          void (async () => {
+            try {
+              const resp = await fetch("/im-channel/test-send", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ kind: row.kind })
+              });
+              const data = await resp.json();
+              setStartError(data.ok ? "" : data.error ?? "\u53D1\u9001\u5931\u8D25");
+            } catch (err) {
+              setStartError(err instanceof Error ? err.message : String(err));
+            }
+          })();
         }
       }
     ),

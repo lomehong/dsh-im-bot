@@ -37,10 +37,12 @@ export declare class ApprovalBridge {
     private readonly log;
     private readonly pending;
     private readonly byToken;
+    private readonly resolvedRoutes;
     constructor(notify: (kind: string, ownerUserId: string, text: string) => Promise<boolean>, sendCard?: (kind: string, ownerUserId: string, card: ApprovalCardPayload) => Promise<boolean>, log?: (line: string) => void);
     /** Whether a decision is outstanding for the channel kind. */
     hasPending(kind: string): boolean;
     private drop;
+    private resolvedRecently;
     /**
      * Ask the channel owner to approve a guest tool call. Sends a button card
      * when the channel supports it (token-linked), otherwise a text card.

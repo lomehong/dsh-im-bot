@@ -45,6 +45,8 @@ export interface InboundMessage {
     readonly chatId?: string;
     /** True when the message mentioned/at-ed the bot in a group chat. */
     readonly mentioned?: boolean;
+    /** Decoded images attached to the message (vision input), max 3 per turn. */
+    readonly images?: readonly ImImage[];
     /** 发送者详细信息（渠道可选填充） */
     readonly userInfo?: InboundUserInfo;
 }
@@ -95,6 +97,13 @@ export interface ApprovalCardRequest {
     readonly toolName: string;
     readonly reason: string | undefined;
 }
+/** One inbound image, decoded to bytes with a sniffed media type. */
+export interface ImImage {
+    readonly bytes: Uint8Array;
+    readonly mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+}
+/** Sniff the media type from magic bytes; undefined when unrecognised. */
+export declare function sniffImageMediaType(bytes: Uint8Array): ImImage['mediaType'] | undefined;
 /** A button decision delivered by a channel's card-callback path. */
 export interface ApprovalAction {
     readonly kind: ChannelKind;

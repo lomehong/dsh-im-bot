@@ -1,6 +1,6 @@
 {
   "name": "@dsh-extra/im-channel",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "IM front-end channels (WeChat, Feishu) for DeepSeek Harness: scan-code login, message routing to agent sessions",
   "license": "MIT",
   "type": "module",
@@ -56,5 +56,27 @@
     "@types/ws": "^8.18.1",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lomehong/dsh-im-bot.git"
+  },
+  "homepage": "https://github.com/lomehong/dsh-im-bot#readme",
+  "bugs": {
+    "url": "https://github.com/lomehong/dsh-im-bot/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "im",
+    "bot",
+    "feishu",
+    "lark",
+    "wechat",
+    "wecom",
+    "digital-avatar"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

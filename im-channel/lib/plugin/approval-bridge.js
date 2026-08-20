@@ -26,6 +26,9 @@ export function parseApprovalReply(text) {
         return 'rejected';
     return undefined;
 }
+/** 已处理审批的回复路由记忆：重复回复「允许/拒绝」时给出明确回执而非石沉大海。 */
+const RESOLVED_ROUTE_TTL_MS = 5 * 60_000;
+const RESOLVED_ROUTE_LIMIT = 64;
 /** Random click-linking token for approval cards (same alphabet as spills). */
 export function newApprovalToken() {
     const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
@@ -43,6 +46,7 @@ export class ApprovalBridge {
     log;
     pending = new Map();
     byToken = new Map();
+    resolvedRoutes = new Map();
     constructor(notify, sendCard = () => Promise.resolve(false), log = () => { }) {
         this.notify = notify;
         this.sendCard = sendCard;
@@ -59,6 +63,18 @@ export class ApprovalBridge {
             if (entry === pending)
                 this.byToken.delete(token);
         }
+        // 记录已处理路由（限容量，最旧的先淘汰）。
+        const key = `${pending.kind}:${pending.ownerUserId}`;
+        this.resolvedRoutes.set(key, Date.now());
+        if (this.resolvedRoutes.size > RESOLVED_ROUTE_LIMIT) {
+            const oldest = this.resolvedRoutes.keys().next().value;
+            if (oldest !== undefined)
+                this.resolvedRoutes.delete(oldest);
+        }
+    }
+    resolvedRecently(kind, ownerUserId) {
+        const at = this.resolvedRoutes.get(`${kind}:${ownerUserId}`);
+        return at !== undefined && Date.now() - at < RESOLVED_ROUTE_TTL_MS;
     }
     /**
      * Ask the channel owner to approve a guest tool call. Sends a button card
@@ -154,12 +170,18 @@ export class ApprovalBridge {
      */
     consumeOwnerReply(kind, ownerUserId, text) {
         const pending = this.pending.get(kind);
-        if (pending === undefined)
+        const decision = parseApprovalReply(text);
+        if (pending === undefined) {
+            // 5 分钟内处理过审批的 Owner 再次回复决策词：给出明确回执，不再流入对话。
+            if (decision !== undefined && this.resolvedRecently(kind, ownerUserId)) {
+                void this.notify(kind, ownerUserId, '该审批已处理，无需再次回复。');
+                return true;
+            }
             return false;
+        }
         // 纵深防御：即便调用方漏了身份校验，桥本身也只接受该渠道 Owner 的回复。
         if (pending.ownerUserId !== ownerUserId)
             return false;
-        const decision = parseApprovalReply(text);
         if (decision === undefined)
             return false;
         void pending.settleCard?.(decision === 'allowed-once' ? 'allowed' : 'rejected').catch(() => { });

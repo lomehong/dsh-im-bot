@@ -137,3 +137,19 @@ describe('ApprovalBridge button cards', () => {
     await expect(decision).resolves.toBe('allowed-once')
   })
 })
+
+describe('ApprovalBridge resolved-route memory', () => {
+  it('acknowledges duplicate decision replies instead of dropping them into chat', async () => {
+    const sent: string[] = []
+    const bridge = new ApprovalBridge(async (_k, _u, text) => { sent.push(text); return true })
+    const decision = bridge.request('feishu', 'ou_owner', '访客甲', { toolName: 'bash', reason: undefined })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    bridge.consumeOwnerReply('feishu', 'ou_owner', '允许')
+    await expect(decision).resolves.toBe('allowed-once')
+    // 迟到的重复回复：被消费并给出明确回执，不再流入 agent 对话。
+    expect(bridge.consumeOwnerReply('feishu', 'ou_owner', '允许')).toBe(true)
+    expect(sent.some(s => s.includes('该审批已处理'))).toBe(true)
+    // 无关用户不受影响。
+    expect(bridge.consumeOwnerReply('feishu', 'ou_other', '允许')).toBe(false)
+  })
+})

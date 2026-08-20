@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as Lark from '@larksuiteoapi/node-sdk';
+import { sniffImageMediaType } from "../../core/channel.js";
 function credentialsPath() {
     return join(homedir(), '.dsh', 'im-channel', 'credentials', 'feishu.json');
 }
@@ -178,11 +179,52 @@ export class FeishuChannel {
     async stop() {
         this.wsClient?.close();
     }
+    /** 下载并路由一条图片消息（messageResource 流式读取，失败静默记日志）。 */
+    async dispatchImage(messageId, imageKey, openId, chatId) {
+        if (imageKey === undefined || this.client === undefined || this.handler === undefined)
+            return;
+        try {
+            const resp = await this.client.im.v1.messageResource.get({
+                params: { type: 'image' },
+                path: { message_id: messageId, file_key: imageKey },
+            });
+            const stream = resp.getReadableStream();
+            if (stream === undefined)
+                throw new Error('飞书图片下载未返回流');
+            const chunks = [];
+            for await (const chunk of stream)
+                chunks.push(chunk);
+            const bytes = new Uint8Array(Buffer.concat(chunks));
+            const mediaType = sniffImageMediaType(bytes);
+            if (mediaType === undefined)
+                throw new Error('无法识别图片格式');
+            if (bytes.byteLength > 5 * 1024 * 1024) {
+                this.log('feishu 图片超过 5MB，忽略');
+                return;
+            }
+            const image = { bytes, mediaType };
+            this.handler({
+                from: { kind: 'feishu', userId: openId },
+                text: '',
+                messageId,
+                ...(chatId !== undefined ? { chatId } : {}),
+                images: [image],
+            });
+        }
+        catch (error) {
+            this.log(`feishu 图片消息处理失败: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
     dispatch(event) {
         const message = event.message;
         const openId = event.sender?.sender_id?.open_id;
         if (message?.chat_id === undefined || openId === undefined || message.message_id === undefined)
             return;
+        if (message.message_type === 'image') {
+            // 图片消息：异步下载后作为带图消息路由（无文字时也可触发）。
+            void this.dispatchImage(message.message_id, JSON.parse(message.content ?? '{}').image_key, openId, message.chat_id);
+            return;
+        }
         if (message.message_type !== 'text')
             return;
         const isGroup = message.chat_type === 'group';

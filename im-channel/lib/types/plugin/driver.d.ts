@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { AgentOptions } from '@deepseek-ai/dsh-agent';
 import type { AgentDriver, PromptOptions, SessionOptions } from '../core/router.ts';
+import type { QuestionAnswer, QuestionItem } from './question-bridge.ts';
 import type { WecomMcpRegistry } from '../channels/wecom/wecom-mcp-registry.ts';
 /**
  * AgentDriver over the in-process harness services: one agent per bound IM
@@ -38,6 +39,8 @@ export declare class HarnessDriver implements AgentDriver {
         }) => Promise<'allowed-once' | 'rejected'> | undefined;
         /** 非本插件驱动轮次的定稿输出（schedule/yuyi 唤醒、竞态尾巴）→ 主动推送 IM。 */
         onBackgroundMessage?: (sessionId: string, text: string) => void;
+        /** ask_user_question 的 IM 桥：agent 作用域遮蔽同名工具，问题推给绑定用户。 */
+        onUserQuestion?: (sessionId: string, questions: QuestionItem[]) => Promise<QuestionAnswer>;
     });
     startSession(options?: SessionOptions): Promise<string>;
     /** Whether this driver currently owns a live agent for the session id. */
@@ -81,11 +84,24 @@ export declare class HarnessDriver implements AgentDriver {
      * 使用 system 消息注入，在 agent 首次响应前提供记忆上下文。
      */
     private injectMemoryContext;
+    /**
+     * Steering: append instructions to the RUNNING turn without cancelling it
+     * (contrast with prompt(), which interrupts first). False when idle — the
+     * caller should tell the user to send a normal message instead.
+     */
+    steer(sessionId: string, text: string): boolean;
     /** Cancel the in-flight turn of a session; false when idle or unknown. */
     cancel(sessionId: string): boolean;
     prompt(sessionId: string, text: string, options?: PromptOptions): Promise<string>;
     /** Push the current turn view to the live sink, skipping no-op renders. */
     private emitView;
+    /**
+     * 在 agent 作用域注册同名 ask_user_question 工具遮蔽全局实现：问题经
+     * IM 桥推给该会话绑定用户，回复（选项序号/文字/自定义）即答案。作用
+     * 域遮蔽只影响本 agent（含子孙），网页端会话不受影响；桥未注入或
+     * 工具服务缺席时保持全局实现。
+     */
+    private mountAskUserTool;
     /** 无 inflight 轮次的定稿输出：3s 去抖合并后推送给绑定用户。 */
     private bufferBackgroundMessage;
     private armBackgroundFlush;

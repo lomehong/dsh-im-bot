@@ -12,6 +12,8 @@ export interface QrLoginBridge {
 export declare class LoginApi {
     private readonly ctx;
     private session;
+    /** 企业微信扫码创建会话（scode），start 时建立、status 轮询消费。 */
+    private wecomQr;
     constructor(ctx: Context);
     /** Register the /im-channel/login/* routes on the web server. */
     register(): void;
@@ -19,10 +21,18 @@ export declare class LoginApi {
     private handleGuestPermissions;
     /** POST /im-channel/guest-permissions/update：保存访客工具/命令白名单。 */
     private handleGuestPermissionsUpdate;
+    /** POST /im-channel/test-send {kind}：向该渠道最近绑定的用户发测试消息。 */
+    private handleTestSend;
+    /** The first bound userId of a channel kind (test-send target). */
+    private userIdForFirstBinding;
     /** Read the im-channel settings section values this surface reports. */
     private readSettingsSection;
     private handleBindingRemove;
     private handleWecomConfigure;
+    /** GET /im-channel/wecom/qr/start：生成扫码创建机器人的二维码。 */
+    private handleWecomQrStart;
+    /** GET /im-channel/wecom/qr/status?scode=…：轮询扫码状态；成功即保存凭证并连接。 */
+    private handleWecomQrStatus;
     private handleWecomMcpConfigure;
     private handleWecomMcpConfig;
     private handleMcpServersList;

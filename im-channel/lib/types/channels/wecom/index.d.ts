@@ -55,6 +55,8 @@ export declare class WecomChannel implements ImChannel {
     connect(): Promise<void>;
     /** 使用最新凭证重新连接（凭证文件已更新后调用） */
     reconnect(): Promise<void>;
+    /** 下载企微图片（URL 5 分钟有效；长连接模式返回 AES 加密数据需解密）。 */
+    private dispatchImage;
     onMessage(handler: (message: InboundMessage) => void): void;
     onDead(handler: (reason: string) => void): void;
     private reportDead;

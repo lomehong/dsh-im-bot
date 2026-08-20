@@ -233,6 +233,21 @@ export function BotChannelTab(props: BotChannelTabProps) {
         bindings={bindings}
         t={t}
         onRemove={row => { void removeBinding(row) }}
+        onTest={row => {
+          void (async () => {
+            try {
+              const resp = await fetch('/im-channel/test-send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ kind: row.kind }),
+              })
+              const data = await resp.json() as { ok: boolean; error?: string }
+              setStartError(data.ok ? '' : (data.error ?? '发送失败'))
+            } catch (err) {
+              setStartError(err instanceof Error ? err.message : String(err))
+            }
+          })()
+        }}
       />
       {!active && <p className={css.bindingsEmpty}>{t('bindings.paused')}</p>}
       <McpServersPanel />

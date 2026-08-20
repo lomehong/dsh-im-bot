@@ -16,6 +16,8 @@ const SESSION_TTL_MS = 8 * 60_000;
 export class LoginApi {
     ctx;
     session;
+    /** 企业微信扫码创建会话（scode），start 时建立、status 轮询消费。 */
+    wecomQr;
     constructor(ctx) {
         this.ctx = ctx;
     }
@@ -51,6 +53,17 @@ export class LoginApi {
             path: '/im-channel/wecom/configure',
             handler: (req, res) => void this.handleWecomConfigure(req, res),
         });
+        // 企业微信扫码创建智能机器人（qc 快速创建服务）：扫码即建即得凭证。
+        web.register({
+            kind: 'exact',
+            path: '/im-channel/wecom/qr/start',
+            handler: (_req, res) => void this.handleWecomQrStart(res),
+        });
+        web.register({
+            kind: 'exact',
+            path: '/im-channel/wecom/qr/status',
+            handler: (req, res) => void this.handleWecomQrStatus(req, res),
+        });
         web.register({
             kind: 'exact',
             path: '/im-channel/wecom/mcp-configure',
@@ -80,6 +93,12 @@ export class LoginApi {
             kind: 'exact',
             path: '/im-channel/mcp-servers/remove',
             handler: (req, res) => void this.handleMcpServerRemove(req, res),
+        });
+        // 连接测试：向该渠道最近绑定的用户推送测试消息（不建会话、不调模型）。
+        web.register({
+            kind: 'exact',
+            path: '/im-channel/test-send',
+            handler: (req, res) => void this.handleTestSend(req, res),
         });
         // 访客权限（数字分身模型）：Owner 在设置页配置访客可用的工具与命令。
         web.register({
@@ -145,6 +164,38 @@ export class LoginApi {
             respondJson(res, 500, { ok: false, error: messageOf(error) });
         }
     }
+    /** POST /im-channel/test-send {kind}：向该渠道最近绑定的用户发测试消息。 */
+    async handleTestSend(req, res) {
+        try {
+            const body = await readJsonBody(req);
+            const kind = body.kind;
+            if (typeof kind !== 'string' || !KINDS.includes(kind)) {
+                respondJson(res, 400, { ok: false, error: `kind 必须是 ${KINDS.join('/')}` });
+                return;
+            }
+            const push = this.ctx.get('im-channel')?.pushToUser;
+            if (push === undefined) {
+                respondJson(res, 500, { ok: false, error: '推送服务不可用（路由未就绪）' });
+                return;
+            }
+            const userId = await this.userIdForFirstBinding(kind);
+            if (userId === '') {
+                respondJson(res, 404, { ok: false, error: `尚无 ${kind} 绑定用户，无法发送测试消息` });
+                return;
+            }
+            const delivered = await push(kind, userId, '✅ DeepSeek Harness 连接测试成功', { markdown: false });
+            respondJson(res, 200, { ok: delivered, delivered, error: delivered ? undefined : '发送失败（无可达目标或渠道未连接）' });
+        }
+        catch (error) {
+            respondJson(res, 500, { ok: false, error: messageOf(error) });
+        }
+    }
+    /** The first bound userId of a channel kind (test-send target). */
+    async userIdForFirstBinding(kind) {
+        const { BindStore } = await import("../core/bind-store.js");
+        const rows = BindStore.shared.rowsForListing();
+        return rows.find(row => row.kind === kind)?.userId ?? '';
+    }
     /** Read the im-channel settings section values this surface reports. */
     async readSettingsSection() {
         return await new Promise(resolve => {
@@ -201,6 +252,54 @@ export class LoginApi {
         catch (error) {
             respondJson(res, 500, { ok: false, error: messageOf(error) });
         }
+    }
+    /** GET /im-channel/wecom/qr/start：生成扫码创建机器人的二维码。 */
+    handleWecomQrStart(res) {
+        void (async () => {
+            try {
+                const { WecomQrAuth } = await import("../channels/wecom/qr-auth.js");
+                const start = await new WecomQrAuth().start();
+                this.wecomQr = { scode: start.scode, startedAt: Date.now() };
+                respondJson(res, 200, { ok: true, qrUrl: start.verificationUrl, scode: start.scode, expiresAt: start.expiresAt, pollIntervalMs: start.pollIntervalMs });
+            }
+            catch (error) {
+                respondJson(res, 500, { ok: false, error: messageOf(error) });
+            }
+        })();
+    }
+    /** GET /im-channel/wecom/qr/status?scode=…：轮询扫码状态；成功即保存凭证并连接。 */
+    handleWecomQrStatus(req, res) {
+        void (async () => {
+            try {
+                const url = new URL(req.url ?? '/', 'http://localhost');
+                const scode = url.searchParams.get('scode') ?? this.wecomQr?.scode ?? '';
+                if (scode === '' || (this.wecomQr !== undefined && this.wecomQr.scode !== scode)) {
+                    respondJson(res, 400, { ok: false, error: '无效的扫码会话' });
+                    return;
+                }
+                const { WecomQrAuth } = await import("../channels/wecom/qr-auth.js");
+                const poll = await new WecomQrAuth().poll(scode);
+                if (poll.status === 'success') {
+                    const { configureWecomBot } = await import("../channels/wecom/login-bridge.js");
+                    await configureWecomBot(poll.botId, poll.secret);
+                    await this.ensureChannelInstance('wecom');
+                    try {
+                        const { WecomChannel } = await import("../channels/wecom/index.js");
+                        await WecomChannel.activeInstance?.reconnect();
+                    }
+                    catch {
+                        // 重连失败不影响凭证保存；重启后自然生效。
+                    }
+                    this.wecomQr = undefined;
+                    respondJson(res, 200, { ok: true, status: 'confirmed' });
+                    return;
+                }
+                respondJson(res, 200, { ok: true, status: poll.status });
+            }
+            catch (error) {
+                respondJson(res, 500, { ok: false, error: messageOf(error) });
+            }
+        })();
     }
     async handleWecomMcpConfigure(req, res) {
         try {

@@ -16,7 +16,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import * as Lark from '@larksuiteoapi/node-sdk'
-import type { ApprovalAction, ApprovalCardRequest, ImChannel, ImUserId, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../../core/channel.ts'
+import type { ApprovalAction, ApprovalCardRequest, ImChannel, ImImage, ImUserId, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from '../../core/channel.ts'
+import { sniffImageMediaType } from '../../core/channel.ts'
 
 /** Channel credentials persisted at ~/.dsh/im-channel/credentials/feishu.json. */
 export interface FeishuCredentials {
@@ -207,10 +208,47 @@ export class FeishuChannel implements ImChannel {
     this.wsClient?.close()
   }
 
+  /** 下载并路由一条图片消息（messageResource 流式读取，失败静默记日志）。 */
+  private async dispatchImage(messageId: string, imageKey: string | undefined, openId: string, chatId: string | undefined): Promise<void> {
+    if (imageKey === undefined || this.client === undefined || this.handler === undefined) return
+    try {
+      const resp = await this.client.im.v1.messageResource.get({
+        params: { type: 'image' },
+        path: { message_id: messageId, file_key: imageKey },
+      })
+      const stream = resp.getReadableStream()
+      if (stream === undefined) throw new Error('飞书图片下载未返回流')
+      const chunks: Buffer[] = []
+      for await (const chunk of stream) chunks.push(chunk as Buffer)
+      const bytes = new Uint8Array(Buffer.concat(chunks))
+      const mediaType = sniffImageMediaType(bytes)
+      if (mediaType === undefined) throw new Error('无法识别图片格式')
+      if (bytes.byteLength > 5 * 1024 * 1024) {
+        this.log('feishu 图片超过 5MB，忽略')
+        return
+      }
+      const image: ImImage = { bytes, mediaType }
+      this.handler({
+        from: { kind: 'feishu', userId: openId as ImUserId },
+        text: '',
+        messageId,
+        ...(chatId !== undefined ? { chatId } : {}),
+        images: [image],
+      })
+    } catch (error) {
+      this.log(`feishu 图片消息处理失败: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   private dispatch(event: ReceiveMessageEvent): void {
     const message = event.message
     const openId = event.sender?.sender_id?.open_id
     if (message?.chat_id === undefined || openId === undefined || message.message_id === undefined) return
+    if (message.message_type === 'image') {
+      // 图片消息：异步下载后作为带图消息路由（无文字时也可触发）。
+      void this.dispatchImage(message.message_id, (JSON.parse(message.content ?? '{}') as { image_key?: string }).image_key, openId, message.chat_id)
+      return
+    }
     if (message.message_type !== 'text') return
     const isGroup = message.chat_type === 'group'
     // Group messages only reach the router when the bot was mentioned;

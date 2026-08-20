@@ -222,6 +222,7 @@ export class HarnessDriver {
                 }
                 // 注册共享记忆工具
                 this.mountSharedMemory(agentCtx, options.userId, options.isMaster);
+                this.mountAskUserTool(agentCtx, sessionId);
             },
         });
         this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });
@@ -272,6 +273,7 @@ export class HarnessDriver {
                 }
                 // 注入共享记忆（如果 dsh-memory 插件已加载）
                 this.mountSharedMemory(agentCtx, userId, isMaster);
+                this.mountAskUserTool(agentCtx, createOptions.sessionId);
             },
         });
         this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });
@@ -414,6 +416,24 @@ export class HarnessDriver {
             // 注入失败时静默跳过，不影响正常流程
         }
     }
+    /**
+     * Steering: append instructions to the RUNNING turn without cancelling it
+     * (contrast with prompt(), which interrupts first). False when idle — the
+     * caller should tell the user to send a normal message instead.
+     */
+    steer(sessionId, text) {
+        const record = this.owned.get(sessionId);
+        if (record === undefined || record.inflight === undefined)
+            return false;
+        const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } });
+        try {
+            record.agent.followup(message);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }
     /** Cancel the in-flight turn of a session; false when idle or unknown. */
     cancel(sessionId) {
         const record = this.owned.get(sessionId);
@@ -525,6 +545,99 @@ export class HarnessDriver {
             return;
         inflight.lastView = view;
         sink(this.maskOutgoing(view));
+    }
+    /**
+     * 在 agent 作用域注册同名 ask_user_question 工具遮蔽全局实现：问题经
+     * IM 桥推给该会话绑定用户，回复（选项序号/文字/自定义）即答案。作用
+     * 域遮蔽只影响本 agent（含子孙），网页端会话不受影响；桥未注入或
+     * 工具服务缺席时保持全局实现。
+     */
+    mountAskUserTool(agentCtx, sessionId) {
+        const ask = this.options.onUserQuestion;
+        const tools = agentCtx.tools;
+        if (ask === undefined || tools === undefined || typeof tools.register !== 'function')
+            return;
+        tools.register({
+            name: 'ask_user_question',
+            description: '向当前对话的用户提问并等待其回复。每个问题带稳定 id；可选选项列表与多选。本机器人的用户在 IM 中回复即作答。',
+            parameters: {
+                questions: {
+                    type: 'array',
+                    required: true,
+                    description: 'Questions to ask the user before continuing.',
+                    items: {
+                        type: 'object',
+                        additionalProperties: true,
+                        properties: {
+                            id: { type: 'string', required: true, description: 'Stable id for this question; echoed in the answer.' },
+                            question: { type: 'string', required: true, description: 'The specific question to ask the user.' },
+                            header: { type: 'string', description: 'Optional short heading for the question.' },
+                            detail: { type: 'string', description: 'Optional supporting detail shown with the question.' },
+                            options: {
+                                type: 'array',
+                                description: 'Optional choices to show the user. If you recommend one, put it first and append "(Recommended)" to that label.',
+                                items: {
+                                    type: 'object',
+                                    additionalProperties: true,
+                                    properties: {
+                                        label: { type: 'string', required: true, description: 'Short user-facing option label.' },
+                                        description: { type: 'string', description: 'One sentence explaining the tradeoff or impact.' },
+                                    },
+                                },
+                            },
+                            multi_select: { type: 'boolean', description: 'Whether the user may select more than one option. Defaults to false.' },
+                        },
+                    },
+                },
+            },
+            output: {
+                schema: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                        answers: {
+                            type: 'array',
+                            required: true,
+                            items: {
+                                type: 'object',
+                                additionalProperties: false,
+                                properties: {
+                                    id: { type: 'string', required: true },
+                                    selected: { type: 'array', required: true, items: { type: 'string' } },
+                                    custom: { type: 'string' },
+                                },
+                            },
+                        },
+                    },
+                },
+                render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+            },
+            async execute(args) {
+                const questions = (args.questions ?? []).map(raw => ({
+                    id: String(raw.id ?? ''),
+                    question: String(raw.question ?? ''),
+                    ...(typeof raw.header === 'string' ? { header: raw.header } : {}),
+                    ...(typeof raw.detail === 'string' ? { detail: raw.detail } : {}),
+                    ...(Array.isArray(raw.options) ? {
+                        options: raw.options.map((option) => {
+                            const opt = option;
+                            return { label: String(opt.label ?? ''), ...(typeof opt.description === 'string' ? { description: opt.description } : {}) };
+                        }),
+                    } : {}),
+                    ...(raw.multi_select === true ? { multiSelect: true } : {}),
+                })).filter(q => q.id.length > 0 && q.question.length > 0);
+                if (questions.length === 0)
+                    throw new Error('ask_user_question 需要至少一个有效问题');
+                const answer = await ask(sessionId, questions);
+                return {
+                    answers: answer.answers.map(a => ({
+                        id: a.id,
+                        selected: [...a.selected],
+                        ...(a.custom !== undefined ? { custom: a.custom } : {}),
+                    })),
+                };
+            },
+        });
     }
     /** 无 inflight 轮次的定稿输出：3s 去抖合并后推送给绑定用户。 */
     bufferBackgroundMessage(sessionId, text) {

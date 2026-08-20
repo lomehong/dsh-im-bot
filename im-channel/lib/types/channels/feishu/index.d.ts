@@ -54,5 +54,7 @@ export declare class FeishuChannel implements ImChannel {
     /** card.action.trigger 载荷 → ApprovalAction（value 内嵌 token 与决策）。 */
     private onCardAction;
     stop(): Promise<void>;
+    /** 下载并路由一条图片消息（messageResource 流式读取，失败静默记日志）。 */
+    private dispatchImage;
     private dispatch;
 }

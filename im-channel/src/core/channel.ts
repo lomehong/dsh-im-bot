@@ -47,6 +47,8 @@ export interface InboundMessage {
   readonly chatId?: string
   /** True when the message mentioned/at-ed the bot in a group chat. */
   readonly mentioned?: boolean
+  /** Decoded images attached to the message (vision input), max 3 per turn. */
+  readonly images?: readonly ImImage[]
   /** 发送者详细信息（渠道可选填充） */
   readonly userInfo?: InboundUserInfo
 }
@@ -98,6 +100,21 @@ export interface ApprovalCardRequest {
   readonly guestLabel: string
   readonly toolName: string
   readonly reason: string | undefined
+}
+
+/** One inbound image, decoded to bytes with a sniffed media type. */
+export interface ImImage {
+  readonly bytes: Uint8Array
+  readonly mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+}
+
+/** Sniff the media type from magic bytes; undefined when unrecognised. */
+export function sniffImageMediaType(bytes: Uint8Array): ImImage['mediaType'] | undefined {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png'
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
+  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'image/gif'
+  if (bytes.length >= 12 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp'
+  return undefined
 }
 
 /** A button decision delivered by a channel's card-callback path. */

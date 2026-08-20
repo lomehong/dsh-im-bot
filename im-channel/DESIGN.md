@@ -41,7 +41,10 @@ im-channel 插件（外部包，经 install.mjs 或 pnpm add git 安装）
 - **访客工具门禁**：driver 在 agent setup 注册 `agentCtx.tools.guard()`（单调、只能拒绝）——
   访客轮次中未命中 guestTools 白名单（精确名/`前缀*`）的工具调用被拒绝，文案面向模型；
   Owner 轮次不受影响，轮次结束恢复。
-- **打断**：执行中收到新消息 → `agent.cancel(user)` + 等旧 turn 落定（8s 超时强制收尾）→ 旧轮以「⏹ 已被中断 + 部分输出」收尾，新消息作为新输入。
+- **打断**：执行中收到新消息 → `agent.cancel(user)` + 等旧 turn 落定（8s 超时强制收尾）→ 旧轮以「⏹ 已被中断 + 部分输出」收尾，新消息作为新输入；`/补充` 则走 steering（followup 不取消）追加指令。
+- **交互式提问**：driver 在 agent setup 注册作用域遮蔽的 `ask_user_question` 工具（同名就近遮蔽全局实现，仅影响本 agent 及子孙）→ QuestionBridge 把问题渲染成编号选项推给提问用户的 IM，回复（序号/文字/逗号多选/自定义）映射回结构化答案；10 分钟超时拒绝；命令前缀的回复不消费。网页端会话不受影响。
+- **图片输入**：飞书（messageResource 流式下载）/企微（URL 下载 + aeskey AES 解密）解析图片消息 → 魔数嗅探媒体类型 → attachments 服务 `saveImage` 持久化 → ImageBlock 附加到用户消息（每轮 ≤3 张、单张 ≤5MB）。
+- **企微扫码接入**：`work.weixin.qq.com/ai/qc` 快速创建服务（generate/query_result），扫码即建机器人并直接返回 botid+secret，自动保存并重连；手动 BotID/Secret 作为折叠兜底。
 - **会话恢复**：绑定持久化于 `bindings.json`，进程重启后 driver 的 owned 表为空；router 在 prompt 前懒重连（`agents.resume(resumeSessionId)`），失败则为 Owner 重建分身并更新锚点，访客随锚点跟随。遗留绑定（无 isMaster）加载时自动晋升最早行为 Owner。
 - **verbosity**：`/回复` 三档映射为 sink 模式 —— 简洁=quiet（只推工具计数+终稿末条）、标准=normal（文字段落流式，基于 assistant/chunk text-delta 增量）、详细=verbose（工具+文字流式）；渲染见 `core/render.ts`。
 

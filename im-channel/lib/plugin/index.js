@@ -11,6 +11,7 @@ import { WecomMcpRegistry } from "../channels/wecom/wecom-mcp-registry.js";
 import { getEnabledMcpServers } from "../channels/mcp-server-manager.js";
 import { LoginApi } from "./login-api.js";
 import { ApprovalBridge } from "./approval-bridge.js";
+import { QuestionBridge } from "./question-bridge.js";
 export const name = 'im-channel';
 export const inject = ['agents'];
 export const provide = ['im-channel'];
@@ -99,6 +100,16 @@ export function apply(ctx, config) {
             return false;
         }
     }, line => { ctx.logger.info(`[im-channel] ${line}`); });
+    // 交互式提问桥：ask_user_question 的问题渲染到提问用户的 IM（编号选项），
+    // 回复即答案。服务层面用「包装替换」：IM 会话走桥，其余会话委托原
+    // provider（网页端），互不抢占（userQuestions 为单 provider 设计，
+    // api-proxy 启动时已注册网页端）。
+    const questionBridge = new QuestionBridge((kind, userId, body) => {
+        const r = router;
+        if (r === undefined)
+            return Promise.resolve(false);
+        return r.pushToUser(kind, userId, body, { markdown: false });
+    }, undefined, line => { ctx.logger.info(`[im-channel] ${line}`); });
     const driver = new HarnessDriver(ctx, {
         mcpRegistry,
         guestTools: () => current.guestTools ?? [],
@@ -115,6 +126,12 @@ export function apply(ctx, config) {
                 if (!delivered)
                     ctx.logger.info(`[im-channel] 后台响应推送失败：${row.kind} ${row.userId.slice(0, 8)}… 无可达目标`);
             });
+        },
+        onUserQuestion: (sessionId, questions) => {
+            const row = store.findBySession(sessionId);
+            if (row === undefined)
+                return Promise.reject(new Error('会话未绑定 IM 用户，无法经 IM 提问'));
+            return questionBridge.ask(row.kind, row.userId, questions);
         },
         onOwnerApproval: ({ sessionId, toolName, reason, guestUserId }) => {
             const row = store.findBySession(sessionId);
@@ -180,8 +197,12 @@ export function apply(ctx, config) {
                     consumeOwnerReply: (kind, ownerUserId, messageText) => approvalBridge.consumeOwnerReply(kind, ownerUserId, messageText),
                     resolveByToken: (kind, token, decision, userId, settleCard) => approvalBridge.resolveByToken(kind, token, decision, userId, settleCard),
                 },
+                question: {
+                    consumeReply: (kind, userId, messageText, commandPrefix) => questionBridge.consumeReply(kind, userId, messageText, commandPrefix),
+                },
                 usageOf: sessionId => driver.usageOf(sessionId),
                 compact: sessionId => driver.compact(sessionId),
+                steer: (sessionId, instruction) => driver.steer(sessionId, instruction),
                 status: () => {
                     const selection = ctx.get('agentDefaultModel');
                     if (selection !== undefined) {

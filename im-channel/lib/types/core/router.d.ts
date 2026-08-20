@@ -1,4 +1,4 @@
-import type { ImChannel, InboundMessage } from './channel.ts';
+import type { ImChannel, ImImage, InboundMessage } from './channel.ts';
 /**
  * Harness-side conversation driver implemented by the plugin glue that
  * talks to the agent services. Channels never see this; the router owns it.
@@ -35,6 +35,8 @@ export interface PromptOptions {
     onMeta?: (meta: {
         usageTokens: number;
     }) => void;
+    /** Images attached to the turn (vision input); capped by the router. */
+    images?: readonly ImImage[];
 }
 /** Per-session knobs a /新建 or /bind session can carry. */
 export interface SessionOptions {
@@ -98,6 +100,10 @@ export interface RouterDeps {
     }>>;
     /** Commands a guest may run (canonical ids); absent = DEFAULT_GUEST_COMMANDS. */
     readonly guestCommands?: () => readonly string[];
+    /** IM question bridge: consumes non-command replies as ask_user_question answers. */
+    readonly question?: {
+        consumeReply(kind: InboundMessage['from']['kind'], userId: string, text: string, commandPrefix: string): boolean;
+    };
     /** Owner-approval coordinator: text-reply consumption + button decisions. */
     readonly approval?: {
         consumeOwnerReply(kind: InboundMessage['from']['kind'], ownerUserId: string, text: string): boolean;
@@ -109,6 +115,8 @@ export interface RouterDeps {
     } | undefined;
     /** Manually compact a session (/压缩); absent reports unavailable. */
     readonly compact?: (sessionId: string) => Promise<boolean>;
+    /** Steer the running turn (/补充); false when nothing is running. */
+    readonly steer?: (sessionId: string, text: string) => boolean;
     /** Diagnostic sink (wired to the host logger); absent = silent. */
     readonly log?: (line: string) => void;
     /**

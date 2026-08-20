@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { ImChannel, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from './channel.ts'
+import type { ImChannel, ImImage, InboundMessage, OutboundMessage, ReplyTarget, TurnMode, TurnSink } from './channel.ts'
 import { modeOf } from './render.ts'
 import { DEFAULT_GUEST_COMMANDS } from './guest-permissions.ts'
 
@@ -40,6 +40,8 @@ export interface PromptOptions {
   isMaster?: boolean
   /** Turn-end metadata (token usage) for reply footers. */
   onMeta?: (meta: { usageTokens: number }) => void
+  /** Images attached to the turn (vision input); capped by the router. */
+  images?: readonly ImImage[]
 }
 
 /** Per-session knobs a /新建 or /bind session can carry. */
@@ -99,6 +101,8 @@ export interface RouterDeps {
   readonly efforts?: () => Array<{ id: string; name: string }> | Promise<Array<{ id: string; name: string }>>
   /** Commands a guest may run (canonical ids); absent = DEFAULT_GUEST_COMMANDS. */
   readonly guestCommands?: () => readonly string[]
+  /** IM question bridge: consumes non-command replies as ask_user_question answers. */
+  readonly question?: { consumeReply(kind: InboundMessage['from']['kind'], userId: string, text: string, commandPrefix: string): boolean }
   /** Owner-approval coordinator: text-reply consumption + button decisions. */
   readonly approval?: {
     consumeOwnerReply(kind: InboundMessage['from']['kind'], ownerUserId: string, text: string): boolean
@@ -108,6 +112,8 @@ export interface RouterDeps {
   readonly usageOf?: (sessionId: string) => { totalTokens: number } | undefined
   /** Manually compact a session (/压缩); absent reports unavailable. */
   readonly compact?: (sessionId: string) => Promise<boolean>
+  /** Steer the running turn (/补充); false when nothing is running. */
+  readonly steer?: (sessionId: string, text: string) => boolean
   /** Diagnostic sink (wired to the host logger); absent = silent. */
   readonly log?: (line: string) => void
   /**
@@ -266,10 +272,16 @@ export class Router {
           return
         }
       }
+      // 提问回答消费：有未答问题时，非命令回复优先作为答案（在审批之后）。
+      if (this.deps.question !== undefined && this.deps.question.consumeReply(message.from.kind, message.from.userId, message.text, this.commandPrefix)) {
+        return
+      }
       if (message.text.startsWith(this.commandPrefix)) {
         await this.runCommand(channel, target, message)
         return
       }
+      // 纯图片消息（text 为空）也进入对话。
+
       // 数字分身模型：渠道内第一个 /bind 的用户是 Owner，其会话是分身本体；
       // 其他所有人都是访客，每个访客拥有独立的会话，互不干扰。
       // 所有会话共享记忆（通过 dsh-memory 插件）。
@@ -373,9 +385,14 @@ export class Router {
       const position = userInfo?.position ?? ''
       const department = userInfo?.department?.join('、') ?? ''
       const identitySeg = [label, displayName, position, department].filter(Boolean).join('·')
-      const enrichedText = `[${identitySeg}] ${message.text}`
+      const enrichedText = message.images !== undefined && message.images.length > 0
+        ? `[${identitySeg}] ${message.text.length > 0 ? message.text : '（请看图片）'}`
+        : `[${identitySeg}] ${message.text}`
       let usageTokens = 0
       promptOptions.onMeta = meta => { usageTokens = meta.usageTokens }
+      if (message.images !== undefined && message.images.length > 0) {
+        promptOptions.images = message.images.slice(0, 3)
+      }
       const reply = await this.deps.driver.prompt(sessionId, enrichedText, promptOptions)
       let finalText = usageTokens > 0 ? `${reply}${FOOTER_SEP}${formatTokens(usageTokens)} tokens` : reply
       const spilled = spillIfLong(finalText)
@@ -617,6 +634,20 @@ export class Router {
         await this.safeSend(channel, target, { text: compacted ? '✅ 压缩完成，历史要点已保留。' : '⚠️ 本次未执行压缩（可能尚不需要）。' })
         return
       }
+      case 'steer': {
+        const instruction = args.join(' ').trim()
+        if (instruction.length === 0) {
+          await this.safeSend(channel, target, { text: '用法：/补充 <补充指令>。任务运行中把指令追加进去，不打断当前任务。' })
+          return
+        }
+        const currentSession = this.deps.store.sessionIdFor(message.from) ?? this.deps.store.ownerFor?.(message.from.kind)?.sessionId
+        if (currentSession === undefined || !(this.deps.steer?.(currentSession, `[${message.from.userId.slice(0, 12)}…] ${instruction}`) ?? false)) {
+          await this.safeSend(channel, target, { text: '当前没有正在运行的任务，请直接发送消息。' })
+          return
+        }
+        await this.safeSend(channel, target, { text: '🧭 已把补充指令加入当前任务。' })
+        return
+      }
       case 'mode': {
         await this.safeSend(channel, target, { text: '模式切换即将上线。' })
         return
@@ -724,6 +755,7 @@ const COMMAND_ALIASES: Record<string, string> = {
   cancel: 'stop',
   全文: 'fulltext',
   压缩: 'compact',
+  补充: 'steer',
 }
 
 const COMMAND_LIST = `机器人命令：
@@ -736,6 +768,7 @@ const COMMAND_LIST = `机器人命令：
 /停止 — 停止正在执行的任务
 /全文 <编号> — 查看被截断长回复的全文
 /压缩 — 压缩会话上下文（仅 Owner）
+/补充 <指令> — 向运行中的任务追加指令（不打断）
 /回复 — 切换回复详细程度（流式推送过程）
 /bind — 绑定当前聊天
 /unbind — 解绑当前聊天`

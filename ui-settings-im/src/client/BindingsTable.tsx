@@ -22,9 +22,10 @@ export interface BindingsTableProps {
   bindings: readonly BindingRow[]
   t: (key: string) => string
   onRemove: (row: BindingRow) => void
+  onTest?: (row: BindingRow) => void
 }
 
-export function BindingsTable({ bindings, t, onRemove }: BindingsTableProps) {
+export function BindingsTable({ bindings, t, onRemove, onTest }: BindingsTableProps) {
   return (
     <div className={css.bindings}>
       <h3 className={css.bindingsTitle}>{t('bindings.title')}（{bindings.length}）</h3>
@@ -46,6 +47,11 @@ export function BindingsTable({ bindings, t, onRemove }: BindingsTableProps) {
                 <td className={css.bindingSession}>{row.sessionId}</td>
                 <td>{row.boundAt.replace('T', ' ').slice(0, 19)}</td>
                 <td>
+                  {onTest !== undefined && (
+                    <button type="button" className={css.bindingRemove} style={{ marginRight: '8px' }} onClick={() => { onTest?.(row) }}>
+                      测试
+                    </button>
+                  )}
                   <button type="button" className={css.bindingRemove} onClick={() => { onRemove(row) }}>
                     {t('bindings.remove')}
                   </button>
