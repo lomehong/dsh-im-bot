@@ -156,7 +156,10 @@ export class WecomChannel {
                 const match = /^(approve|deny):([a-z0-9]{4,12})$/.exec(eventKey);
                 if (match !== null) {
                     const client = this.client;
-                    const frameHeaders = data.headers;
+                    // WsFrameHeaders 是 { headers } 包裹结构（Pick<WsFrame,'headers'>），
+                    // 传内层对象会让 SDK 读到 frame.headers === undefined → req_id 空 →
+                    // errcode 846605 invalid req_id（生产已踩）。
+                    const frameHeaders = { headers: data.headers };
                     const taskId = `imch_appr_${match[2]}`;
                     const settleCard = async (outcome) => {
                         if (client === null || client === undefined)
