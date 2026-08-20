@@ -185,8 +185,10 @@ export class WecomChannel implements ImChannel {
     })
 
     this.client.on('event.template_card_event', (data: WsFrame<EventMessage>) => {
-      const event = data.body?.event
-      const eventKey = event && 'event_key' in event ? (event as any).event_key : '-'
+      const event = data.body?.event as unknown as { eventtype?: string, event_key?: string, template_card_event?: { event_key?: string, task_id?: string } } | undefined
+      // 实测线上载荷是嵌套结构：event.template_card_event.event_key（SDK
+      // 类型声明为平铺，与 wire 不符——之前在顶层找 event_key 永远是 '-'）。
+      const eventKey = event?.template_card_event?.event_key ?? event?.event_key ?? '-'
       this.log(`wecom template_card_event: user=${data.body?.from?.userid ?? '?'} key=${eventKey}`)
       // 审批按钮回调：key 形如 approve:<token> / deny:<token>（同连接回传）。
       if (typeof eventKey === 'string' && data.body?.from?.userid !== undefined) {

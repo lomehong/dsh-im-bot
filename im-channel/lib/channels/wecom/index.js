@@ -147,7 +147,9 @@ export class WecomChannel {
         });
         this.client.on('event.template_card_event', (data) => {
             const event = data.body?.event;
-            const eventKey = event && 'event_key' in event ? event.event_key : '-';
+            // 实测线上载荷是嵌套结构：event.template_card_event.event_key（SDK
+            // 类型声明为平铺，与 wire 不符——之前在顶层找 event_key 永远是 '-'）。
+            const eventKey = event?.template_card_event?.event_key ?? event?.event_key ?? '-';
             this.log(`wecom template_card_event: user=${data.body?.from?.userid ?? '?'} key=${eventKey}`);
             // 审批按钮回调：key 形如 approve:<token> / deny:<token>（同连接回传）。
             if (typeof eventKey === 'string' && data.body?.from?.userid !== undefined) {
