@@ -91,12 +91,14 @@ export function apply(ctx, config) {
     }, async (kind, ownerUserId, card) => {
         const channel = channelOf(kind);
         const target = ownerTargetOf(kind, ownerUserId);
+        ctx.logger.info(`[im-channel] sendCard check: kind=${kind} hasChannel=${channel !== undefined} hasSendApprovalCard=${typeof channel?.sendApprovalCard === 'function'} target=${target !== undefined}`);
         if (channel?.sendApprovalCard === undefined || target === undefined)
             return false;
         try {
             return await channel.sendApprovalCard(target, { ...card, reason: card.reason });
         }
-        catch {
+        catch (error) {
+            ctx.logger.info(`[im-channel] sendCard threw: ${error instanceof Error ? error.message : String(error)}`);
             return false;
         }
     }, line => { ctx.logger.info(`[im-channel] ${line}`); });
@@ -168,7 +170,12 @@ export function apply(ctx, config) {
             const owner = store.ownerFor(row.kind);
             if (owner === undefined)
                 return Promise.resolve('rejected');
-            const label = guestUserId === undefined || guestUserId === 'unknown' ? row.userId.slice(0, 10) + '…' : guestUserId.slice(0, 16);
+            // 主人自触发时 label 标「你」+ 工具名（双卡区分）；访客触发时保留「访客：xxx」。
+            // ownerUserId 与 trigger userId 一致时即「自触发」。
+            const isOwnerTrigger = guestUserId !== undefined && owner.userId === guestUserId;
+            const label = isOwnerTrigger
+                ? `你（${toolName}）`
+                : `访客：${(guestUserId === undefined || guestUserId === 'unknown' ? row.userId : guestUserId).slice(0, 16)}`;
             return approvalBridge.request(row.kind, owner.userId, label, { toolName, reason });
         },
     });

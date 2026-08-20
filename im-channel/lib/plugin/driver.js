@@ -260,6 +260,25 @@ export class HarnessDriver {
      * session.header.parentSession 指向父会话），再查 turnActors。深度上限
      * 防御环；中途 agent 不在注册表时按已知最外层计。
      */
+    /** 沿 parentSession 链上溯到根，返回根会话绑定行的 userId（渠道 Owner 的 userId）。 */
+    ownerUserIdFor(agent) {
+        if (agent === undefined)
+            return undefined;
+        const agents = this.ctx.get('agents');
+        if (agents === undefined)
+            return undefined;
+        let id = agent.id;
+        for (let depth = 0; depth < 8; depth++) {
+            const a = agents.get(id);
+            if (a?.session === undefined)
+                return undefined;
+            const parent = a.session.header.parentSession;
+            if (parent === undefined)
+                return id;
+            id = parent;
+        }
+        return id;
+    }
     actorOfAgent(agentId) {
         let id = agentId;
         for (let depth = 0; depth < 8; depth++) {
@@ -430,7 +449,11 @@ export class HarnessDriver {
                 return await next();
             const info = this.turnInfos.get(sessionId);
             try {
-                const outcome = await decide({ sessionId, toolName: req.toolName, reason: req.reason, guestUserId: info?.userId });
+                const ownerUserId = this.ownerUserIdFor(req.agent);
+                // isOwnerTrigger: 触发者 userId 与根 Owner userId 一致 → 主人自触发
+                // （label 显示「你」）。不一致 → 访客触发（label 显示访客名）。
+                const isOwnerTrigger = ownerUserId !== undefined && info?.userId === ownerUserId;
+                const outcome = await decide({ sessionId, toolName: req.toolName, reason: req.reason, guestUserId: info?.userId, isOwnerTrigger });
                 return outcome ?? 'rejected';
             }
             catch {

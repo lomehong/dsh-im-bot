@@ -36,6 +36,7 @@ export declare class HarnessDriver implements AgentDriver {
             toolName: string;
             reason: string | undefined;
             guestUserId: string | undefined;
+            isOwnerTrigger: boolean;
         }) => Promise<'allowed-once' | 'rejected'> | undefined;
         /** 非本插件驱动轮次的定稿输出（schedule/yuyi 唤醒、竞态尾巴）→ 主动推送 IM。 */
         onBackgroundMessage?: (sessionId: string, text: string) => void;
@@ -59,6 +60,8 @@ export declare class HarnessDriver implements AgentDriver {
      * session.header.parentSession 指向父会话），再查 turnActors。深度上限
      * 防御环；中途 agent 不在注册表时按已知最外层计。
      */
+    /** 沿 parentSession 链上溯到根，返回根会话绑定行的 userId（渠道 Owner 的 userId）。 */
+    private ownerUserIdFor;
     private actorOfAgent;
     /**
      * P0 安全：外发 IM 前的敏感信息脱敏（masking 服务存在时）。流式视图与

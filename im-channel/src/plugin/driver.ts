@@ -88,7 +88,7 @@ export class HarnessDriver implements AgentDriver {
       mcpRegistry?: WecomMcpRegistry
       guestTools?: () => readonly string[]
       /** 访客工具审批：把决策交给插件层（推卡片给 Owner、等待 IM 回复）。 */
-      onOwnerApproval?: (info: { sessionId: string; toolName: string; reason: string | undefined; guestUserId: string | undefined }) => Promise<'allowed-once' | 'rejected'> | undefined
+      onOwnerApproval?: (info: { sessionId: string; toolName: string; reason: string | undefined; guestUserId: string | undefined; isOwnerTrigger: boolean }) => Promise<'allowed-once' | 'rejected'> | undefined
       /** 非本插件驱动轮次的定稿输出（schedule/yuyi 唤醒、竞态尾巴）→ 主动推送 IM。 */
       onBackgroundMessage?: (sessionId: string, text: string) => void
       /** ask_user_question 的 IM 桥：agent 作用域遮蔽同名工具，问题推给绑定用户。 */
@@ -319,6 +319,22 @@ export class HarnessDriver implements AgentDriver {
    * session.header.parentSession 指向父会话），再查 turnActors。深度上限
    * 防御环；中途 agent 不在注册表时按已知最外层计。
    */
+  /** 沿 parentSession 链上溯到根，返回根会话绑定行的 userId（渠道 Owner 的 userId）。 */
+  private ownerUserIdFor(agent: { id: string; session?: { header: { id: string; parentSession?: string } } } | undefined): string | undefined {
+    if (agent === undefined) return undefined
+    const agents = this.ctx.get('agents') as { get: (id: string) => { session?: { header: { id: string; parentSession?: string } } } | undefined } | undefined
+    if (agents === undefined) return undefined
+    let id: string = agent.id
+    for (let depth = 0; depth < 8; depth++) {
+      const a = agents.get(id)
+      if (a?.session === undefined) return undefined
+      const parent: string | undefined = a.session.header.parentSession
+      if (parent === undefined) return id
+      id = parent
+    }
+    return id
+  }
+
   private actorOfAgent(agentId: string): 'owner' | 'guest' | undefined {
     let id: string = agentId
     for (let depth = 0; depth < 8; depth++) {
@@ -489,7 +505,11 @@ export class HarnessDriver implements AgentDriver {
       if (decide === undefined) return await next()
       const info = this.turnInfos.get(sessionId)
       try {
-        const outcome = await decide({ sessionId, toolName: req.toolName, reason: req.reason, guestUserId: info?.userId })
+        const ownerUserId = this.ownerUserIdFor(req.agent)
+        // isOwnerTrigger: 触发者 userId 与根 Owner userId 一致 → 主人自触发
+        // （label 显示「你」）。不一致 → 访客触发（label 显示访客名）。
+        const isOwnerTrigger = ownerUserId !== undefined && info?.userId === ownerUserId
+        const outcome = await decide({ sessionId, toolName: req.toolName, reason: req.reason, guestUserId: info?.userId, isOwnerTrigger })
         return outcome ?? 'rejected'
       } catch {
         return 'rejected'
