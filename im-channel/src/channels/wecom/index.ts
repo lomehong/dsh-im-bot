@@ -196,12 +196,14 @@ export class WecomChannel implements ImChannel {
         if (match !== null) {
           const client = this.client
           const frameHeaders = data.headers
+          const taskId = `imch_appr_${match[2]}`
           const settleCard = async (outcome: 'allowed' | 'rejected' | 'timeout'): Promise<void> => {
             if (client === null || client === undefined) return
             try {
-              await client.updateTemplateCard(frameHeaders as never, decidedWecomCard(outcome))
-            } catch {
-              // 卡片刷新失败不影响决策本身。
+              await client.updateTemplateCard(frameHeaders as never, decidedWecomCard(outcome, taskId))
+              this.log(`wecom 审批卡片已定稿: task=${taskId} outcome=${outcome}`)
+            } catch (error) {
+              this.log(`wecom 审批卡片定稿失败（决策本身不受影响）: ${error instanceof Error ? error.message : String(error)}`)
             }
           }
           for (const handler of this.approvalHandlers) {
@@ -578,10 +580,13 @@ class WecomTurnSink implements TurnSink {
 }
 
 /** 审批卡片定稿态（WeCom template_card 更新体）。 */
-function decidedWecomCard(outcome: 'allowed' | 'rejected' | 'timeout'): never {
+function decidedWecomCard(outcome: 'allowed' | 'rejected' | 'timeout', taskId: string): never {
   const title = outcome === 'allowed' ? '已允许（本次）' : outcome === 'rejected' ? '已拒绝' : '审批超时，自动拒绝'
+  // task_id 必须与回调收到的一致，否则 updateTemplateCard 被 API 拒收。
+  // 定稿卡片无 button_list —— 按钮区被移除，用户无法再点。
   return {
     card_type: 'button_interaction',
+    task_id: taskId,
     main_title: { title: `🔐 工具执行审批 · ${title}` },
     sub_title_text: '本审批已结束',
   } as never
