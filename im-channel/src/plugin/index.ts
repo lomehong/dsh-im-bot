@@ -132,7 +132,32 @@ export function apply(ctx: Context, config: ImChannelSection): void {
     },
     line => { ctx.logger.info(`[im-channel] ${line}`) },
   )
-  // 交互式提问桥：ask_user_question 的问题渲染到提问用户的 IM（编号选项），
+  // 沿 parentSession 链向上找Owner会话（数字分身模型下访客的会话继承自分身）。
+    // 用于审批/提问必须把卡片发到Owner本人，而不是发到触发它的访客。
+    const ownerSessionOf = (agentId: string): string => {
+      const agents = ctx.get('agents') as { get: (id: string) => { session?: { header: { id: string; parentSession?: string } } } | undefined } | undefined
+      if (agents === undefined) return agentId
+      let id: string = agentId
+      for (let depth = 0; depth < 8; depth++) {
+        const agent = agents.get(id)
+        if (agent?.session === undefined) return id
+        const parent: string | undefined = agent.session.header.parentSession
+        if (parent === undefined) return id
+        id = parent
+      }
+      return id
+    }
+    const ownerRowFor = (sessionId: string): { kind: 'feishu' | 'wechat' | 'wecom'; userId: string } | undefined => {
+      const rootId = ownerSessionOf(sessionId)
+      const ids: string[] = rootId === sessionId ? [sessionId] : [sessionId, rootId]
+      for (const id of ids) {
+        const row = store.findBySession(id)
+        if (row !== undefined) return row
+      }
+      return undefined
+    }
+
+      // 交互式提问桥：ask_user_question 的问题渲染到提问用户的 IM（编号选项），
   // 回复即答案。服务层面用「包装替换」：IM 会话走桥，其余会话委托原
   // provider（网页端），互不抢占（userQuestions 为单 provider 设计，
   // api-proxy 启动时已注册网页端）。
@@ -151,7 +176,7 @@ export function apply(ctx: Context, config: ImChannelSection): void {
     // 非本插件驱动轮次的产出（schedule 提醒、yuyi 唤醒、竞态尾巴）
     // 主动推送到该会话绑定用户的 IM——网页端看得到的，手机上也看得到。
     onBackgroundMessage: (sessionId, messageText) => {
-      const row = store.findBySession(sessionId)
+      const row = ownerRowFor(sessionId)
       if (row === undefined) return
       const r = router
       if (r === undefined) return
@@ -160,7 +185,7 @@ export function apply(ctx: Context, config: ImChannelSection): void {
       })
     },
     onUserQuestion: (sessionId, questions) => {
-      const row = store.findBySession(sessionId)
+      const row = ownerRowFor(sessionId)
       if (row === undefined) return Promise.reject(new Error('会话未绑定 IM 用户，无法经 IM 提问'))
       return questionBridge.ask(row.kind, row.userId, questions)
     },
