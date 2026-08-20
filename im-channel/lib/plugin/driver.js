@@ -417,11 +417,13 @@ export class HarnessDriver {
         const events = this.ctx;
         events.on('approval/request', async (req, next) => {
             const sessionId = req.agent?.id;
-            // 服务范围 hook：仅当被本插件驱动产生的 agent 才裁决（owner-only ；
-            // 访客走 tools/pre-execute ask 路径；非本插件 agent 直接放过）。
-            if (sessionId === undefined || !this.owned.has(sessionId))
+            if (sessionId === undefined)
                 return await next();
-            if (this.actorOfAgent(sessionId) !== 'guest')
+            // 接管的判断：本插件驱动产生的 agent（owner 或访客）一律接管；网页端
+            // 创建的会话绕过本插件（不在 owned、不在 store 绑定行），不受牵连。
+            // 之前限制为访客——导致 Owner 自身在 IM 触发 escalate 时的审批被默认放过
+            // 给了网页端，IM 端看不到。现在一视同仁：Owner 也走 IM 审批。
+            if (!this.owned.has(sessionId))
                 return await next();
             const decide = this.options.onOwnerApproval;
             if (decide === undefined)
