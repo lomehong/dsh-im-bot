@@ -123,12 +123,27 @@ export function apply(ctx: Context, config: ImChannelSection): void {
     async (kind, ownerUserId, card) => {
       const channel = channelOf(kind)
       const target = ownerTargetOf(kind, ownerUserId)
-      ctx.logger.info(`[im-channel] sendCard check: kind=${kind} hasChannel=${channel !== undefined} hasSendApprovalCard=${typeof channel?.sendApprovalCard === 'function'} target=${target !== undefined}`)
-      if (channel?.sendApprovalCard === undefined || target === undefined) return false
+      // 双路日志（console + logger），logger.info 在 cordis 严格类型下可能不打印。
+      const log = (line: string) => {
+        process.stdout.write(`[im-channel] ${line}
+`)
+        try { (ctx.logger as { info?: (s: string) => void }).info?.(`[im-channel] ${line}`) } catch { /* ignore */ }
+      }
+      const hasChannel = channel !== undefined
+      const hasSendApprovalCard = typeof channel?.sendApprovalCard === 'function'
+      const hasTarget = target !== undefined
+      log(`sendCard check: kind=${kind} hasChannel=${hasChannel} hasSendApprovalCard=${hasSendApprovalCard} target=${hasTarget}`)
+      if (!hasChannel || !hasSendApprovalCard || !hasTarget) return false
+      // fn.call 绑定 channel 为 this：sendApprovalCard 是实例方法，裸引用
+      // 调用会丢 this，方法体第一行 this.client 即 undefined（生产已踩）。
+      const fn = channel.sendApprovalCard
+      if (fn === undefined) return false
       try {
-        return await channel.sendApprovalCard(target, { ...card, reason: card.reason })
+        const ok = await fn.call(channel, target, { ...card, reason: card.reason })
+        log(`sendCard result: kind=${kind} ok=${ok}`)
+        return ok
       } catch (error) {
-        ctx.logger.info(`[im-channel] sendCard threw: ${error instanceof Error ? error.message : String(error)}`)
+        log(`sendCard threw: ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
         return false
       }
     },
