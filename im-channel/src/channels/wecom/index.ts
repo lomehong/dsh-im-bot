@@ -352,7 +352,7 @@ export class WecomChannel implements ImChannel {
         msgtype: 'template_card',
         template_card: {
           card_type: 'button_interaction',
-          main_title: { title: '访客工具审批', desc: `工具：${card.toolName}` },
+          main_title: { title: '工具执行审批', desc: `工具：${card.toolName}` },
           sub_title_text: `触发：${card.guestLabel}${card.reason !== undefined && card.reason.length > 0 ? `
 说明：${card.reason.slice(0, 120)}` : ''}
 请选择允许或拒绝（超时自动拒绝）`,
@@ -576,7 +576,7 @@ function decidedWecomCard(outcome: 'allowed' | 'rejected' | 'timeout'): never {
   const title = outcome === 'allowed' ? '已允许（本次）' : outcome === 'rejected' ? '已拒绝' : '审批超时，自动拒绝'
   return {
     card_type: 'button_interaction',
-    main_title: { title: `🔐 访客工具审批 · ${title}` },
+    main_title: { title: `🔐 工具执行审批 · ${title}` },
     sub_title_text: '本审批已结束',
   } as never
 }

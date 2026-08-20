@@ -600,7 +600,7 @@ function outcomeText(outcome) {
 /** Build the approval card: markdown body + 允许/拒绝 buttons carrying the token. */
 function approvalCardJson(card) {
     const lines = [
-        '**🔐 访客工具审批**',
+        '**🔐 工具执行审批**',
         `- 触发：${card.guestLabel}`,
         `- 工具：**${card.toolName}**`,
         ...(card.reason !== undefined && card.reason.length > 0 ? [`- 说明：${card.reason.slice(0, 200)}`] : []),
