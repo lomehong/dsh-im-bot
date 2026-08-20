@@ -203,7 +203,13 @@ export class WecomChannel implements ImChannel {
               await client.updateTemplateCard(frameHeaders as never, decidedWecomCard(outcome, taskId))
               this.log(`wecom 审批卡片已定稿: task=${taskId} outcome=${outcome}`)
             } catch (error) {
-              this.log(`wecom 审批卡片定稿失败（决策本身不受影响）: ${error instanceof Error ? error.message : String(error)}`)
+              // SDK 在 errcode!==0 时 reject 回执帧对象（非 Error）——深打印
+              // 露出 errcode/errmsg 供定位。
+              let detail = ''
+              try {
+                detail = error instanceof Error ? error.message : JSON.stringify(error)
+              } catch { detail = String(error) }
+              this.log(`wecom 审批卡片定稿失败（决策本身不受影响）: ${detail}`)
             }
           }
           for (const handler of this.approvalHandlers) {
@@ -587,6 +593,7 @@ function decidedWecomCard(outcome: 'allowed' | 'rejected' | 'timeout', taskId: s
   return {
     card_type: 'button_interaction',
     task_id: taskId,
+    source: { desc: 'dsh 数字分身' },
     main_title: { title: `🔐 工具执行审批 · ${title}` },
     sub_title_text: '本审批已结束',
   } as never
