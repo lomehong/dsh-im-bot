@@ -352,6 +352,10 @@ export class WecomChannel implements ImChannel {
         msgtype: 'template_card',
         template_card: {
           card_type: 'button_interaction',
+          // 企微 button_interaction 要求 task_id 全局唯一（回调也携带）；
+          // 审批 token 天然唯一，直接复用。
+          task_id: `imch_appr_${card.token}`,
+          source: { desc: 'dsh 数字分身' },
           main_title: { title: '工具执行审批', desc: `工具：${card.toolName}` },
           sub_title_text: `触发：${card.guestLabel}${card.reason !== undefined && card.reason.length > 0 ? `
 说明：${card.reason.slice(0, 120)}` : ''}

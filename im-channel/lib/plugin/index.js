@@ -38,7 +38,15 @@ function isCredentialled(kind) {
 }
 /** Build one channel instance from its declared config. */
 function buildChannel(kind, ctx) {
-    const log = (line) => { ctx.logger.info(line); };
+    // stdout 双写：ctx.logger.info 在该 profile 下不落盘，渠道层错误曾因此静默。
+    const log = (line) => {
+        process.stdout.write(`[im-channel] ${line}
+`);
+        try {
+            ctx.logger.info(line);
+        }
+        catch { /* ignore */ }
+    };
     switch (kind) {
         case 'wechat': return new WechatChannel({ ctxLog: log });
         case 'feishu': return new FeishuChannel({ log });
