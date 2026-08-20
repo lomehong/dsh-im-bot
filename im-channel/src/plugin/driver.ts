@@ -609,35 +609,46 @@ export class HarnessDriver implements AgentDriver {
     const ask = this.options.onUserQuestion
     const tools = (agentCtx as { tools?: { register(definition: unknown): unknown } }).tools
     if (ask === undefined || tools === undefined || typeof tools.register !== 'function') return
+    // 注册失败（schema 校验、平台差异等）降级为跳过：保留全局工具实现，
+    // 绝不让遮蔽注册的问题炸掉整个会话创建（/bind 曾因此全线失败）。
+    try {
     tools.register({
       name: 'ask_user_question',
       description: '向当前对话的用户提问并等待其回复。每个问题带稳定 id；可选选项列表与多选。本机器人的用户在 IM 中回复即作答。',
+      // 标准 JSON Schema（required 为对象级数组）：defineTool 不在依赖树，
+      // 编写格式（属性内 required:true）会被 assertSupportedJsonSchema 拒收。
       parameters: {
-        questions: {
-          type: 'array',
-          required: true,
-          description: 'Questions to ask the user before continuing.',
-          items: {
-            type: 'object',
-            additionalProperties: true,
-            properties: {
-              id: { type: 'string', required: true, description: 'Stable id for this question; echoed in the answer.' },
-              question: { type: 'string', required: true, description: 'The specific question to ask the user.' },
-              header: { type: 'string', description: 'Optional short heading for the question.' },
-              detail: { type: 'string', description: 'Optional supporting detail shown with the question.' },
-              options: {
-                type: 'array',
-                description: 'Optional choices to show the user. If you recommend one, put it first and append "(Recommended)" to that label.',
-                items: {
-                  type: 'object',
-                  additionalProperties: true,
-                  properties: {
-                    label: { type: 'string', required: true, description: 'Short user-facing option label.' },
-                    description: { type: 'string', description: 'One sentence explaining the tradeoff or impact.' },
+        type: 'object',
+        additionalProperties: false,
+        required: ['questions'],
+        properties: {
+          questions: {
+            type: 'array',
+            description: 'Questions to ask the user before continuing.',
+            items: {
+              type: 'object',
+              additionalProperties: true,
+              required: ['id', 'question'],
+              properties: {
+                id: { type: 'string', description: 'Stable id for this question; echoed in the answer.' },
+                question: { type: 'string', description: 'The specific question to ask the user.' },
+                header: { type: 'string', description: 'Optional short heading for the question.' },
+                detail: { type: 'string', description: 'Optional supporting detail shown with the question.' },
+                options: {
+                  type: 'array',
+                  description: 'Optional choices to show the user. If you recommend one, put it first and append "(Recommended)" to that label.',
+                  items: {
+                    type: 'object',
+                    additionalProperties: true,
+                    required: ['label'],
+                    properties: {
+                      label: { type: 'string', description: 'Short user-facing option label.' },
+                      description: { type: 'string', description: 'One sentence explaining the tradeoff or impact.' },
+                    },
                   },
                 },
+                multi_select: { type: 'boolean', description: 'Whether the user may select more than one option. Defaults to false.' },
               },
-              multi_select: { type: 'boolean', description: 'Whether the user may select more than one option. Defaults to false.' },
             },
           },
         },
@@ -646,16 +657,17 @@ export class HarnessDriver implements AgentDriver {
         schema: {
           type: 'object',
           additionalProperties: false,
+          required: ['answers'],
           properties: {
             answers: {
               type: 'array',
-              required: true,
               items: {
                 type: 'object',
                 additionalProperties: false,
+                required: ['id', 'selected'],
                 properties: {
-                  id: { type: 'string', required: true },
-                  selected: { type: 'array', required: true, items: { type: 'string' } },
+                  id: { type: 'string' },
+                  selected: { type: 'array', items: { type: 'string' } },
                   custom: { type: 'string' },
                 },
               },
@@ -689,9 +701,12 @@ export class HarnessDriver implements AgentDriver {
         }
       },
     })
+    } catch (error) {
+      this.ctx.logger?.warn?.('[im-channel] ask_user_question 遮蔽工具注册失败（保留全局实现）: ' + messageOf(error))
+    }
   }
 
-/** 无 inflight 轮次的定稿输出：3s 去抖合并后推送给绑定用户。 */
+  /** 无 inflight 轮次的定稿输出：3s 去抖合并后推送给绑定用户。 */
   private bufferBackgroundMessage(sessionId: string, text: string): void {
     const existing = this.backgroundBuffer.get(sessionId)
     if (existing !== undefined) {

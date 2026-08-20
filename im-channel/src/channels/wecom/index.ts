@@ -162,6 +162,10 @@ export class WecomChannel implements ImChannel {
     })
 
     // 注册消息事件
+    // 原始帧诊断：任何消息/事件帧到达即记录（排障用，区分平台不推送 vs 我们过滤）。
+    this.client.on('message', (data: WsFrame<BaseMessage>) => {
+      this.log(`wecom raw frame: cmd=${data.cmd ?? '?'} msgtype=${(data.body as { msgtype?: string } | undefined)?.msgtype ?? '?'} from=${(data.body as { from?: { userid?: string } } | undefined)?.from?.userid ?? '?'}`)
+    })
     this.client.on('message.text', (data: WsFrame<TextMessage>) => {
       void this.handleIncoming(data)
     })

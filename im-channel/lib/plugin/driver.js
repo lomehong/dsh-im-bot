@@ -557,87 +557,103 @@ export class HarnessDriver {
         const tools = agentCtx.tools;
         if (ask === undefined || tools === undefined || typeof tools.register !== 'function')
             return;
-        tools.register({
-            name: 'ask_user_question',
-            description: '向当前对话的用户提问并等待其回复。每个问题带稳定 id；可选选项列表与多选。本机器人的用户在 IM 中回复即作答。',
-            parameters: {
-                questions: {
-                    type: 'array',
-                    required: true,
-                    description: 'Questions to ask the user before continuing.',
-                    items: {
+        // 注册失败（schema 校验、平台差异等）降级为跳过：保留全局工具实现，
+        // 绝不让遮蔽注册的问题炸掉整个会话创建（/bind 曾因此全线失败）。
+        try {
+            tools.register({
+                name: 'ask_user_question',
+                description: '向当前对话的用户提问并等待其回复。每个问题带稳定 id；可选选项列表与多选。本机器人的用户在 IM 中回复即作答。',
+                // 标准 JSON Schema（required 为对象级数组）：defineTool 不在依赖树，
+                // 编写格式（属性内 required:true）会被 assertSupportedJsonSchema 拒收。
+                parameters: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['questions'],
+                    properties: {
+                        questions: {
+                            type: 'array',
+                            description: 'Questions to ask the user before continuing.',
+                            items: {
+                                type: 'object',
+                                additionalProperties: true,
+                                required: ['id', 'question'],
+                                properties: {
+                                    id: { type: 'string', description: 'Stable id for this question; echoed in the answer.' },
+                                    question: { type: 'string', description: 'The specific question to ask the user.' },
+                                    header: { type: 'string', description: 'Optional short heading for the question.' },
+                                    detail: { type: 'string', description: 'Optional supporting detail shown with the question.' },
+                                    options: {
+                                        type: 'array',
+                                        description: 'Optional choices to show the user. If you recommend one, put it first and append "(Recommended)" to that label.',
+                                        items: {
+                                            type: 'object',
+                                            additionalProperties: true,
+                                            required: ['label'],
+                                            properties: {
+                                                label: { type: 'string', description: 'Short user-facing option label.' },
+                                                description: { type: 'string', description: 'One sentence explaining the tradeoff or impact.' },
+                                            },
+                                        },
+                                    },
+                                    multi_select: { type: 'boolean', description: 'Whether the user may select more than one option. Defaults to false.' },
+                                },
+                            },
+                        },
+                    },
+                },
+                output: {
+                    schema: {
                         type: 'object',
-                        additionalProperties: true,
+                        additionalProperties: false,
+                        required: ['answers'],
                         properties: {
-                            id: { type: 'string', required: true, description: 'Stable id for this question; echoed in the answer.' },
-                            question: { type: 'string', required: true, description: 'The specific question to ask the user.' },
-                            header: { type: 'string', description: 'Optional short heading for the question.' },
-                            detail: { type: 'string', description: 'Optional supporting detail shown with the question.' },
-                            options: {
+                            answers: {
                                 type: 'array',
-                                description: 'Optional choices to show the user. If you recommend one, put it first and append "(Recommended)" to that label.',
                                 items: {
                                     type: 'object',
-                                    additionalProperties: true,
+                                    additionalProperties: false,
+                                    required: ['id', 'selected'],
                                     properties: {
-                                        label: { type: 'string', required: true, description: 'Short user-facing option label.' },
-                                        description: { type: 'string', description: 'One sentence explaining the tradeoff or impact.' },
+                                        id: { type: 'string' },
+                                        selected: { type: 'array', items: { type: 'string' } },
+                                        custom: { type: 'string' },
                                     },
                                 },
                             },
-                            multi_select: { type: 'boolean', description: 'Whether the user may select more than one option. Defaults to false.' },
                         },
                     },
+                    render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
                 },
-            },
-            output: {
-                schema: {
-                    type: 'object',
-                    additionalProperties: false,
-                    properties: {
-                        answers: {
-                            type: 'array',
-                            required: true,
-                            items: {
-                                type: 'object',
-                                additionalProperties: false,
-                                properties: {
-                                    id: { type: 'string', required: true },
-                                    selected: { type: 'array', required: true, items: { type: 'string' } },
-                                    custom: { type: 'string' },
-                                },
-                            },
-                        },
-                    },
+                async execute(args) {
+                    const questions = (args.questions ?? []).map(raw => ({
+                        id: String(raw.id ?? ''),
+                        question: String(raw.question ?? ''),
+                        ...(typeof raw.header === 'string' ? { header: raw.header } : {}),
+                        ...(typeof raw.detail === 'string' ? { detail: raw.detail } : {}),
+                        ...(Array.isArray(raw.options) ? {
+                            options: raw.options.map((option) => {
+                                const opt = option;
+                                return { label: String(opt.label ?? ''), ...(typeof opt.description === 'string' ? { description: opt.description } : {}) };
+                            }),
+                        } : {}),
+                        ...(raw.multi_select === true ? { multiSelect: true } : {}),
+                    })).filter(q => q.id.length > 0 && q.question.length > 0);
+                    if (questions.length === 0)
+                        throw new Error('ask_user_question 需要至少一个有效问题');
+                    const answer = await ask(sessionId, questions);
+                    return {
+                        answers: answer.answers.map(a => ({
+                            id: a.id,
+                            selected: [...a.selected],
+                            ...(a.custom !== undefined ? { custom: a.custom } : {}),
+                        })),
+                    };
                 },
-                render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
-            },
-            async execute(args) {
-                const questions = (args.questions ?? []).map(raw => ({
-                    id: String(raw.id ?? ''),
-                    question: String(raw.question ?? ''),
-                    ...(typeof raw.header === 'string' ? { header: raw.header } : {}),
-                    ...(typeof raw.detail === 'string' ? { detail: raw.detail } : {}),
-                    ...(Array.isArray(raw.options) ? {
-                        options: raw.options.map((option) => {
-                            const opt = option;
-                            return { label: String(opt.label ?? ''), ...(typeof opt.description === 'string' ? { description: opt.description } : {}) };
-                        }),
-                    } : {}),
-                    ...(raw.multi_select === true ? { multiSelect: true } : {}),
-                })).filter(q => q.id.length > 0 && q.question.length > 0);
-                if (questions.length === 0)
-                    throw new Error('ask_user_question 需要至少一个有效问题');
-                const answer = await ask(sessionId, questions);
-                return {
-                    answers: answer.answers.map(a => ({
-                        id: a.id,
-                        selected: [...a.selected],
-                        ...(a.custom !== undefined ? { custom: a.custom } : {}),
-                    })),
-                };
-            },
-        });
+            });
+        }
+        catch (error) {
+            this.ctx.logger?.warn?.('[im-channel] ask_user_question 遮蔽工具注册失败（保留全局实现）: ' + messageOf(error));
+        }
     }
     /** 无 inflight 轮次的定稿输出：3s 去抖合并后推送给绑定用户。 */
     bufferBackgroundMessage(sessionId, text) {

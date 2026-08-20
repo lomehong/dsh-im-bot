@@ -125,6 +125,10 @@ export class WecomChannel {
             this.log(`wecom 错误: ${err.message}`);
         });
         // 注册消息事件
+        // 原始帧诊断：任何消息/事件帧到达即记录（排障用，区分平台不推送 vs 我们过滤）。
+        this.client.on('message', (data) => {
+            this.log(`wecom raw frame: cmd=${data.cmd ?? '?'} msgtype=${data.body?.msgtype ?? '?'} from=${data.body?.from?.userid ?? '?'}`);
+        });
         this.client.on('message.text', (data) => {
             void this.handleIncoming(data);
         });
