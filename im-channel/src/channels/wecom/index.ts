@@ -592,12 +592,15 @@ class WecomTurnSink implements TurnSink {
 function decidedWecomCard(outcome: 'allowed' | 'rejected' | 'timeout', taskId: string): never {
   const title = outcome === 'allowed' ? '已允许（本次）' : outcome === 'rejected' ? '已拒绝' : '审批超时，自动拒绝'
   // task_id 必须与回调收到的一致，否则 updateTemplateCard 被 API 拒收。
-  // 定稿卡片无 button_list —— 按钮区被移除，用户无法再点。
+  // 企微要求 button_interaction 卡片 button_list 为 1-6 个（errcode 40016
+  // invalid button size——零按钮被拒）。保留单个结果按钮：key 用 done:
+  // 前缀（桥的正则只认 approve|deny，点击无副作用），文案即终态。
   return {
     card_type: 'button_interaction',
     task_id: taskId,
     source: { desc: 'dsh 数字分身' },
     main_title: { title: `🔐 工具执行审批 · ${title}` },
     sub_title_text: '本审批已结束',
+    button_list: [{ text: title, key: `done:${taskId}`, style: 1 }],
   } as never
 }
