@@ -125,36 +125,12 @@ export class HarnessDriver implements AgentDriver {
         })
       })
     }
-    // P1 审批：访客轮次的非白名单工具升级为 `{kind:'ask'}`，走 harness 的
-    // approval/request 瀑布线；由插件层推卡片给 Owner 回复决策。守卫仍作为
-    // 无审批服务时的 fail-closed 兜底（ask 无人应答即拒绝）。
-    // 事件名走字符串转型：与 assistant/chunk 同理，兼容未声明对应类型
-    // 合并的 dsh-tools / dsh-user-approval 版本。
-    const serviceEvents = this.ctx as unknown as {
-      on: (name: string, handler: (...args: never[]) => Promise<unknown>) => void
-    }
-    serviceEvents.on('tools/pre-execute', async (exec: Readonly<{ name: string; agent?: { id: string } }>, next: () => Promise<{ kind: 'allow' }>) => {
-      const agentId = exec.agent?.id
-      if (agentId !== undefined && this.actorOfAgent(agentId) === 'guest' && !matchesToolPattern(exec.name, this.guestTools())) {
-        return { kind: 'ask', reason: `访客请求使用工具 ${exec.name}` }
-      }
-      return await next()
-    })
-    serviceEvents.on('approval/request', async (req: { agent?: { id: string }; toolName: string; reason?: string }, next: () => Promise<'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'>): Promise<'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'> => {
-      const sessionId = req.agent?.id
-      if (sessionId === undefined || !this.owned.has(sessionId)) return await next()
-      // 只裁决访客轮次；Owner 轮次的审批交给默认链（通常直接放行）。
-      if (this.actorOfAgent(sessionId) !== 'guest') return await next()
-      const decide = this.options.onOwnerApproval
-      if (decide === undefined) return await next()
-      const info = this.turnInfos.get(sessionId)
-      try {
-        const outcome = await decide({ sessionId, toolName: req.toolName, reason: req.reason, guestUserId: info?.userId })
-        return outcome ?? 'rejected'
-      } catch {
-        return 'rejected'
-      }
-    })
+    // P1 审批 / 工具门宪：监听 tools/pre-execute（也覆盖沙箱 escalate
+    // 路径所有者自身的会话）。hook 走字符串转型 + 类的公共方法
+    // `installApprovalHook`（plugin/index.ts 在服务就绪后调用，跟 agent
+    // 建立时机解耦——之前在 driver 构造函数里监听会被不在 owned 映射的
+    // Owner 自身会话绕过）。
+    this.installApprovalHook()
     ctx.on('session/event', (session, event: SessionEvent) => {
       const record = this.owned.get(session.header.id)
       if (record === undefined || record.agent.session !== session) return
@@ -490,6 +466,33 @@ export class HarnessDriver implements AgentDriver {
     } catch {
       return false
     }
+  }
+
+  /**
+   * Install the approval waterfall hook on the plugin root context.
+   * Decoupled from per-agent creation so Owner-driven escalate (e.g. a
+   * sandbox approveEscalation inside an Owner session) is also captured.
+   */
+  installApprovalHook(): void {
+    const events = this.ctx as unknown as {
+      on: (name: string, handler: (...args: never[]) => Promise<unknown>) => void
+    }
+    events.on('approval/request', async (req: { agent?: { id: string }; toolName: string; reason?: string }, next: () => Promise<'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'>): Promise<'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'> => {
+      const sessionId = req.agent?.id
+      // 服务范围 hook：仅当被本插件驱动产生的 agent 才裁决（owner-only ；
+      // 访客走 tools/pre-execute ask 路径；非本插件 agent 直接放过）。
+      if (sessionId === undefined || !this.owned.has(sessionId)) return await next()
+      if (this.actorOfAgent(sessionId) !== 'guest') return await next()
+      const decide = this.options.onOwnerApproval
+      if (decide === undefined) return await next()
+      const info = this.turnInfos.get(sessionId)
+      try {
+        const outcome = await decide({ sessionId, toolName: req.toolName, reason: req.reason, guestUserId: info?.userId })
+        return outcome ?? 'rejected'
+      } catch {
+        return 'rejected'
+      }
+    })
   }
 
   /** Cancel the in-flight turn of a session; false when idle or unknown. */

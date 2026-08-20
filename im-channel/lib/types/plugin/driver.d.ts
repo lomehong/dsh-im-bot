@@ -90,6 +90,12 @@ export declare class HarnessDriver implements AgentDriver {
      * caller should tell the user to send a normal message instead.
      */
     steer(sessionId: string, text: string): boolean;
+    /**
+     * Install the approval waterfall hook on the plugin root context.
+     * Decoupled from per-agent creation so Owner-driven escalate (e.g. a
+     * sandbox approveEscalation inside an Owner session) is also captured.
+     */
+    installApprovalHook(): void;
     /** Cancel the in-flight turn of a session; false when idle or unknown. */
     cancel(sessionId: string): boolean;
     prompt(sessionId: string, text: string, options?: PromptOptions): Promise<string>;

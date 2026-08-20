@@ -198,6 +198,10 @@ export function apply(ctx: Context, config: ImChannelSection): void {
       return approvalBridge.request(row.kind, owner.userId, label, { toolName, reason })
     },
   })
+  // 在插件根 context 挂审批瀑布线（与 agent 建立时机解耦）：保证 Owner 自身的
+  // 沙箱 escalate 也能被 IM 桥接——之前在 driver 构造函数里监听会被不在
+  // owned 映射的 Owner 自身会话绕过。
+  driver.installApprovalHook()
   // One bind store for the whole plugin lifetime (and process-shared with
   // the login HTTP API): the bound-session rows must survive router
   // rebuilds, and /bind hands out new sessions from it.
