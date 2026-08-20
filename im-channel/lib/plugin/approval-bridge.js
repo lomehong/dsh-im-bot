@@ -127,7 +127,7 @@ export class ApprovalBridge {
                 const reason = info.reason?.slice(0, 200) ?? '';
                 const card = [
                     '🔐 访客工具审批',
-                    `访客：${guestLabel}`,
+                    guestLabel,
                     `工具：${info.toolName}`,
                     ...(reason.length > 0 ? [`说明：${reason}`] : []),
                     '',

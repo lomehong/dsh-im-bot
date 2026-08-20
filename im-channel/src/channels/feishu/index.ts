@@ -602,7 +602,7 @@ function outcomeText(outcome: 'allowed' | 'rejected' | 'timeout'): string {
 function approvalCardJson(card: ApprovalCardRequest): string {
   const lines = [
     '**🔐 访客工具审批**',
-    `- 访客：${card.guestLabel}`,
+    `- 触发：${card.guestLabel}`,
     `- 工具：**${card.toolName}**`,
     ...(card.reason !== undefined && card.reason.length > 0 ? [`- 说明：${card.reason.slice(0, 200)}`] : []),
   ]

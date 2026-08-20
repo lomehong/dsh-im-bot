@@ -309,7 +309,7 @@ export class WecomChannel {
                 template_card: {
                     card_type: 'button_interaction',
                     main_title: { title: '访客工具审批', desc: `工具：${card.toolName}` },
-                    sub_title_text: `访客：${card.guestLabel}${card.reason !== undefined && card.reason.length > 0 ? `
+                    sub_title_text: `触发：${card.guestLabel}${card.reason !== undefined && card.reason.length > 0 ? `
 说明：${card.reason.slice(0, 120)}` : ''}
 请选择允许或拒绝（超时自动拒绝）`,
                     button_list: [
