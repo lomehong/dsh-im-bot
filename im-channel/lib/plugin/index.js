@@ -11,6 +11,7 @@ import { WecomChannel, loadWecomCredentials } from "../channels/wecom/index.js";
 import { WecomMcpRegistry } from "../channels/wecom/wecom-mcp-registry.js";
 import { getEnabledMcpServers } from "../channels/mcp-server-manager.js";
 import { LoginApi } from "./login-api.js";
+import { createSectionView } from "./section-view.js";
 import { ApprovalBridge } from "./approval-bridge.js";
 import { QuestionBridge } from "./question-bridge.js";
 export const name = 'im-channel';
@@ -59,7 +60,9 @@ export function apply(ctx, config) {
     ctx.inject(['webServer'], (wctx) => {
         new LoginApi(wctx).register();
     });
-    let current = config;
+    // settings 节视图：必须惰性读取（见 section-view.ts 头注释——缓存快照
+    // 会导致运行期改动全部失效、只有重启才能恢复）。
+    const section = createSectionView(config);
     let router;
     let disposeRouter;
     ctx.provide('im-channel', {
@@ -178,7 +181,7 @@ export function apply(ctx, config) {
     }, undefined, line => { ctx.logger.info(`[im-channel] ${line}`); });
     const driver = new HarnessDriver(ctx, {
         mcpRegistry,
-        guestTools: () => current.guestTools ?? [],
+        guestTools: () => section.read().guestTools ?? [],
         // 非本插件驱动轮次的产出（schedule 提醒、yuyi 唤醒、竞态尾巴）
         // 主动推送到该会话绑定用户的 IM——网页端看得到的，手机上也看得到。
         onBackgroundMessage: (sessionId, messageText) => {
@@ -225,7 +228,7 @@ export function apply(ctx, config) {
     const store = BindStore.shared;
     /** Rebuild the router from the current declared instances: dispose the old one, then build channels for every credentialled enabled instance. */
     const rebuildRouter = () => {
-        const next = current;
+        const next = section.read();
         disposeRouter?.();
         disposeRouter = undefined;
         router = undefined;
@@ -249,12 +252,12 @@ export function apply(ctx, config) {
             config: { commandPrefix: next.commandPrefix },
             log: (line) => { ctx.logger.info(line); },
             allowed: (from) => {
-                const list = current.allowlist;
+                const list = section.read().allowlist;
                 if (list === undefined || list.length === 0)
                     return true;
                 return list.includes(from.userId) || list.includes(`${from.kind}:${from.userId}`);
             },
-            guestCommands: () => current.guestCommands ?? DEFAULT_GUEST_COMMANDS,
+            guestCommands: () => section.read().guestCommands ?? DEFAULT_GUEST_COMMANDS,
             approval: {
                 consumeOwnerReply: (kind, ownerUserId, messageText) => approvalBridge.consumeOwnerReply(kind, ownerUserId, messageText),
                 resolveByToken: (kind, token, decision, userId, settleCard) => approvalBridge.resolveByToken(kind, token, decision, userId, settleCard),
@@ -337,12 +340,12 @@ export function apply(ctx, config) {
         disposeRouter = () => { void router?.stop(); router = undefined; };
     };
     installSettingsSection(ctx, NS, Config, config, {
-        setSource: (source) => { current = source(); },
+        setSource: (source) => { section.adopt(source); },
         onChange: () => {
             // Reconcile the live router against the declared instances: a changed
             // set, kind, or enabled flag restarts the router wholesale — channel
             // connections are cheap to re-establish relative to config edits.
-            const next = current;
+            const next = section.read();
             // A platform with saved credentials but no declared instance (e.g.
             // credentials persisted before this reconciliation existed, or settings
             // storage was reset) gets an auto-created instance so the bot actually
