@@ -50,8 +50,19 @@ export declare class LoginApi {
      * confirmed so the router (re)starts without manual configuration. One
      * instance per platform: the wechat protocol allows exactly one poll
      * session per bot token, and duplicate instances multiply every reply.
+     *
+     * @returns true 当该平台实例行已存在（本次未写 settings，onChange 不会
+     *   被 trigger——调用方需自行拉起通道，见 bringChannelUp）。
      */
     private ensureChannelInstance;
+    /**
+     * 凭证保存成功后让通道尽快上线。两条路：
+     * - wecom 通道在线（activeInstance 存在）→ reconnect() 热替换凭证；
+     * - 其余情况（冷启动：实例先建、凭证后到，通道从未起来；或微信/飞书
+     *   换号需要重开轮询）→ 调 im-channel 服务 reload() 强制重建路由，
+     *   不依赖 settings 变化触发 onChange。
+     */
+    private bringChannelUp;
     private handleBindings;
     private readBindings;
     private handleStart;

@@ -103,6 +103,12 @@ export function apply(ctx: Context, config: ImChannelSection): void {
     },
     /** 三平台机器人状态汇总（控制台右缘状态栏数据源）。 */
     botsStatus: (): ImBotStatus[] => collectBotStatus(router?.channels),
+    /**
+     * 按当前声明实例强制重建路由。用于「凭证后到」场景（登录/配置保存时
+     * 实例行已存在，settings 值不变不会触发 onChange）：冷启动的通道
+     * 由这里拉起，不依赖重启。
+     */
+    reload: (): void => rebuildRouter(),
   })
   // One driver for the whole plugin lifetime: router rebuilds (settings
   // edits, instance reconciliation) must not orphan bound sessions — the
@@ -237,36 +243,24 @@ export function apply(ctx: Context, config: ImChannelSection): void {
   // rebuilds, and /bind hands out new sessions from it.
   const store = BindStore.shared
 
-  installSettingsSection(ctx, NS, Config, config, {
-    setSource: (source) => { current = source() },
-    onChange: () => {
-      // Reconcile the live router against the declared instances: a changed
-      // set, kind, or enabled flag restarts the router wholesale — channel
-      // connections are cheap to re-establish relative to config edits.
-      const next = current
-      // A platform with saved credentials but no declared instance (e.g.
-      // credentials persisted before this reconciliation existed, or settings
-      // storage was reset) gets an auto-created instance so the bot actually
-      // comes online after login. The settings service is optional at the
-      // composition level, so reach it through a scoped inject.
-      ctx.inject(['settings'], sctx => {
-        void ensureInstancesForCredentials(sctx, next).catch(() => {})
-      })
-      if (router !== undefined && sameTopology(router, next)) return
-      disposeRouter?.()
-      router = undefined
-      const channels: ImChannel[] = []
-      for (const [name, instance] of Object.entries(next.channels)) {
-        if (!instance.enabled) continue
-        if (!isCredentialled(instance.kind)) {
-          ctx.logger.warn(`im-channel: 实例 ${name}（${instance.kind}）缺少登录凭证，跳过；请先完成该平台的登录/配置`)
-          continue
-        }
-        const channel = buildChannel(instance.kind, ctx)
-        channels.push(channel)
+  /** Rebuild the router from the current declared instances: dispose the old one, then build channels for every credentialled enabled instance. */
+  const rebuildRouter = (): void => {
+    const next = current
+    disposeRouter?.()
+    disposeRouter = undefined
+    router = undefined
+    const channels: ImChannel[] = []
+    for (const [name, instance] of Object.entries(next.channels)) {
+      if (!instance.enabled) continue
+      if (!isCredentialled(instance.kind)) {
+        ctx.logger.warn(`im-channel: 实例 ${name}（${instance.kind}）缺少登录凭证，跳过；请先完成该平台的登录/配置`)
+        continue
       }
-      if (channels.length === 0) return
-      router = new Router({
+      const channel = buildChannel(instance.kind, ctx)
+      channels.push(channel)
+    }
+    if (channels.length === 0) return
+    router = new Router({
         channels,
         driver,
         store,
@@ -349,6 +343,25 @@ export function apply(ctx: Context, config: ImChannelSection): void {
         yield () => { void router?.stop() }
       }, 'im-channel.router')
       disposeRouter = () => { void router?.stop(); router = undefined }
+  }
+
+  installSettingsSection(ctx, NS, Config, config, {
+    setSource: (source) => { current = source() },
+    onChange: () => {
+      // Reconcile the live router against the declared instances: a changed
+      // set, kind, or enabled flag restarts the router wholesale — channel
+      // connections are cheap to re-establish relative to config edits.
+      const next = current
+      // A platform with saved credentials but no declared instance (e.g.
+      // credentials persisted before this reconciliation existed, or settings
+      // storage was reset) gets an auto-created instance so the bot actually
+      // comes online after login. The settings service is optional at the
+      // composition level, so reach it through a scoped inject.
+      ctx.inject(['settings'], sctx => {
+        void ensureInstancesForCredentials(sctx, next).catch(() => {})
+      })
+      if (router !== undefined && sameTopology(router, next)) return
+      rebuildRouter()
     },
   })
 }

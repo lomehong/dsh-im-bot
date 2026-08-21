@@ -75,6 +75,12 @@ export function apply(ctx, config) {
         },
         /** 三平台机器人状态汇总（控制台右缘状态栏数据源）。 */
         botsStatus: () => collectBotStatus(router?.channels),
+        /**
+         * 按当前声明实例强制重建路由。用于「凭证后到」场景（登录/配置保存时
+         * 实例行已存在，settings 值不变不会触发 onChange）：冷启动的通道
+         * 由这里拉起，不依赖重启。
+         */
+        reload: () => rebuildRouter(),
     });
     // One driver for the whole plugin lifetime: router rebuilds (settings
     // edits, instance reconciliation) must not orphan bound sessions — the
@@ -217,6 +223,119 @@ export function apply(ctx, config) {
     // the login HTTP API): the bound-session rows must survive router
     // rebuilds, and /bind hands out new sessions from it.
     const store = BindStore.shared;
+    /** Rebuild the router from the current declared instances: dispose the old one, then build channels for every credentialled enabled instance. */
+    const rebuildRouter = () => {
+        const next = current;
+        disposeRouter?.();
+        disposeRouter = undefined;
+        router = undefined;
+        const channels = [];
+        for (const [name, instance] of Object.entries(next.channels)) {
+            if (!instance.enabled)
+                continue;
+            if (!isCredentialled(instance.kind)) {
+                ctx.logger.warn(`im-channel: 实例 ${name}（${instance.kind}）缺少登录凭证，跳过；请先完成该平台的登录/配置`);
+                continue;
+            }
+            const channel = buildChannel(instance.kind, ctx);
+            channels.push(channel);
+        }
+        if (channels.length === 0)
+            return;
+        router = new Router({
+            channels,
+            driver,
+            store,
+            config: { commandPrefix: next.commandPrefix },
+            log: (line) => { ctx.logger.info(line); },
+            allowed: (from) => {
+                const list = current.allowlist;
+                if (list === undefined || list.length === 0)
+                    return true;
+                return list.includes(from.userId) || list.includes(`${from.kind}:${from.userId}`);
+            },
+            guestCommands: () => current.guestCommands ?? DEFAULT_GUEST_COMMANDS,
+            approval: {
+                consumeOwnerReply: (kind, ownerUserId, messageText) => approvalBridge.consumeOwnerReply(kind, ownerUserId, messageText),
+                resolveByToken: (kind, token, decision, userId, settleCard) => approvalBridge.resolveByToken(kind, token, decision, userId, settleCard),
+            },
+            question: {
+                consumeReply: (kind, userId, messageText, commandPrefix) => questionBridge.consumeReply(kind, userId, messageText, commandPrefix),
+            },
+            usageOf: sessionId => driver.usageOf(sessionId),
+            compact: sessionId => driver.compact(sessionId),
+            steer: (sessionId, instruction) => driver.steer(sessionId, instruction),
+            status: () => {
+                const selection = ctx.get('agentDefaultModel');
+                if (selection !== undefined) {
+                    const value = selection.currentSelection();
+                    const facts = { cwd: process.cwd(), provider: value.provider, model: value.model };
+                    if (value.reasoningEffort !== undefined)
+                        facts.reasoningEffort = value.reasoningEffort;
+                    return facts;
+                }
+                return { cwd: process.cwd(), provider: '-', model: '-' };
+            },
+            workspaces: () => {
+                const registry = ctx.get('workspaceRegistry');
+                if (registry === undefined)
+                    return [];
+                return registry.list().map((w) => ({ path: w.path, title: w.title }));
+            },
+            models: async () => {
+                const llm = ctx.get('llm');
+                if (llm === undefined)
+                    return [];
+                const choices = [];
+                for (const provider of llm.listProviders()) {
+                    try {
+                        const models = await llm.listModels(provider.id);
+                        for (const m of models)
+                            choices.push({ provider: provider.id, model: m.id, label: m.id });
+                    }
+                    catch {
+                        // Provider without a discoverable catalog is skipped.
+                    }
+                }
+                return choices;
+            },
+            cancel: sessionId => driver.cancel(sessionId),
+            efforts: async () => {
+                const llm = ctx.get('llm');
+                const selection = ctx.get('agentDefaultModel');
+                if (llm === undefined || selection === undefined)
+                    return [];
+                const value = selection.currentSelection();
+                if (value.provider === '' || value.model === '')
+                    return [];
+                try {
+                    const info = await llm.resolveModelInfo(value.provider, value.model);
+                    return info.reasoning?.efforts.map(e => ({ id: e.id, name: e.name })) ?? [];
+                }
+                catch {
+                    return [];
+                }
+            },
+            setDefaultModel: async (patch) => {
+                const service = ctx.get('agentDefaultModel');
+                if (service === undefined)
+                    throw new Error('agentDefaultModel 服务不可用');
+                const current = service.currentSelection();
+                await service.saveSelection({
+                    provider: patch.provider ?? current.provider,
+                    model: patch.model ?? current.model,
+                    ...patch.reasoningEffort === undefined && current.reasoningEffort === undefined
+                        ? {}
+                        : { reasoningEffort: patch.reasoningEffort ?? current.reasoningEffort },
+                });
+            },
+        });
+        void ctx.effect(async function* () {
+            await router?.start();
+            yield () => { void router?.stop(); };
+        }, 'im-channel.router');
+        disposeRouter = () => { void router?.stop(); router = undefined; };
+    };
     installSettingsSection(ctx, NS, Config, config, {
         setSource: (source) => { current = source(); },
         onChange: () => {
@@ -234,114 +353,7 @@ export function apply(ctx, config) {
             });
             if (router !== undefined && sameTopology(router, next))
                 return;
-            disposeRouter?.();
-            router = undefined;
-            const channels = [];
-            for (const [name, instance] of Object.entries(next.channels)) {
-                if (!instance.enabled)
-                    continue;
-                if (!isCredentialled(instance.kind)) {
-                    ctx.logger.warn(`im-channel: 实例 ${name}（${instance.kind}）缺少登录凭证，跳过；请先完成该平台的登录/配置`);
-                    continue;
-                }
-                const channel = buildChannel(instance.kind, ctx);
-                channels.push(channel);
-            }
-            if (channels.length === 0)
-                return;
-            router = new Router({
-                channels,
-                driver,
-                store,
-                config: { commandPrefix: next.commandPrefix },
-                log: (line) => { ctx.logger.info(line); },
-                allowed: (from) => {
-                    const list = current.allowlist;
-                    if (list === undefined || list.length === 0)
-                        return true;
-                    return list.includes(from.userId) || list.includes(`${from.kind}:${from.userId}`);
-                },
-                guestCommands: () => current.guestCommands ?? DEFAULT_GUEST_COMMANDS,
-                approval: {
-                    consumeOwnerReply: (kind, ownerUserId, messageText) => approvalBridge.consumeOwnerReply(kind, ownerUserId, messageText),
-                    resolveByToken: (kind, token, decision, userId, settleCard) => approvalBridge.resolveByToken(kind, token, decision, userId, settleCard),
-                },
-                question: {
-                    consumeReply: (kind, userId, messageText, commandPrefix) => questionBridge.consumeReply(kind, userId, messageText, commandPrefix),
-                },
-                usageOf: sessionId => driver.usageOf(sessionId),
-                compact: sessionId => driver.compact(sessionId),
-                steer: (sessionId, instruction) => driver.steer(sessionId, instruction),
-                status: () => {
-                    const selection = ctx.get('agentDefaultModel');
-                    if (selection !== undefined) {
-                        const value = selection.currentSelection();
-                        const facts = { cwd: process.cwd(), provider: value.provider, model: value.model };
-                        if (value.reasoningEffort !== undefined)
-                            facts.reasoningEffort = value.reasoningEffort;
-                        return facts;
-                    }
-                    return { cwd: process.cwd(), provider: '-', model: '-' };
-                },
-                workspaces: () => {
-                    const registry = ctx.get('workspaceRegistry');
-                    if (registry === undefined)
-                        return [];
-                    return registry.list().map((w) => ({ path: w.path, title: w.title }));
-                },
-                models: async () => {
-                    const llm = ctx.get('llm');
-                    if (llm === undefined)
-                        return [];
-                    const choices = [];
-                    for (const provider of llm.listProviders()) {
-                        try {
-                            const models = await llm.listModels(provider.id);
-                            for (const m of models)
-                                choices.push({ provider: provider.id, model: m.id, label: m.id });
-                        }
-                        catch {
-                            // Provider without a discoverable catalog is skipped.
-                        }
-                    }
-                    return choices;
-                },
-                cancel: sessionId => driver.cancel(sessionId),
-                efforts: async () => {
-                    const llm = ctx.get('llm');
-                    const selection = ctx.get('agentDefaultModel');
-                    if (llm === undefined || selection === undefined)
-                        return [];
-                    const value = selection.currentSelection();
-                    if (value.provider === '' || value.model === '')
-                        return [];
-                    try {
-                        const info = await llm.resolveModelInfo(value.provider, value.model);
-                        return info.reasoning?.efforts.map(e => ({ id: e.id, name: e.name })) ?? [];
-                    }
-                    catch {
-                        return [];
-                    }
-                },
-                setDefaultModel: async (patch) => {
-                    const service = ctx.get('agentDefaultModel');
-                    if (service === undefined)
-                        throw new Error('agentDefaultModel 服务不可用');
-                    const current = service.currentSelection();
-                    await service.saveSelection({
-                        provider: patch.provider ?? current.provider,
-                        model: patch.model ?? current.model,
-                        ...patch.reasoningEffort === undefined && current.reasoningEffort === undefined
-                            ? {}
-                            : { reasoningEffort: patch.reasoningEffort ?? current.reasoningEffort },
-                    });
-                },
-            });
-            void ctx.effect(async function* () {
-                await router?.start();
-                yield () => { void router?.stop(); };
-            }, 'im-channel.router');
-            disposeRouter = () => { void router?.stop(); router = undefined; };
+            rebuildRouter();
         },
     });
 }

@@ -272,16 +272,9 @@ export class LoginApi {
       }
       const { configureWecomBot } = await import('../channels/wecom/login-bridge.ts')
       await configureWecomBot(body.botId, body.secret)
-      // 自动创建通道实例
-      await this.ensureChannelInstance('wecom')
-      // 触发重连，让新凭证立即生效
-      try {
-        const { WecomChannel } = await import('../channels/wecom/index.ts')
-        await WecomChannel.activeInstance?.reconnect()
-      } catch (e) {
-        // 重连失败不影响凭证保存
-        this.ctx.logger.warn(`im-channel: 企业微信重连失败: ${messageOf(e)}`)
-      }
+      // 自动创建通道实例；实例已存在时 onChange 不会触发，需自行拉起通道。
+      const existed = await this.ensureChannelInstance('wecom')
+      if (existed) await this.bringChannelUp('wecom')
       // 如果当前有登录会话，标记为已确认
       if (this.session !== undefined && this.session.kind === 'wecom') {
         this.session.status = 'confirmed'
@@ -321,13 +314,9 @@ export class LoginApi {
         if (poll.status === 'success') {
           const { configureWecomBot } = await import('../channels/wecom/login-bridge.ts')
           await configureWecomBot(poll.botId, poll.secret)
-          await this.ensureChannelInstance('wecom')
-          try {
-            const { WecomChannel } = await import('../channels/wecom/index.ts')
-            await WecomChannel.activeInstance?.reconnect()
-          } catch {
-            // 重连失败不影响凭证保存；重启后自然生效。
-          }
+          // 实例已存在时 onChange 不会触发，需自行拉起通道（冷启动 reload / 在线 reconnect）。
+          const existed = await this.ensureChannelInstance('wecom')
+          if (existed) await this.bringChannelUp('wecom')
           this.wecomQr = undefined
           respondJson(res, 200, { ok: true, status: 'confirmed' })
           return
@@ -488,23 +477,68 @@ export class LoginApi {
    * confirmed so the router (re)starts without manual configuration. One
    * instance per platform: the wechat protocol allows exactly one poll
    * session per bot token, and duplicate instances multiply every reply.
+   *
+   * @returns true 当该平台实例行已存在（本次未写 settings，onChange 不会
+   *   被 trigger——调用方需自行拉起通道，见 bringChannelUp）。
    */
-  private async ensureChannelInstance(kind: LoginKind): Promise<void> {
+  private async ensureChannelInstance(kind: LoginKind): Promise<boolean> {
     try {
-      this.ctx.inject(['settings'], async sctx => {
-        const section = sctx.settings.get(NS) as { channels?: Record<string, { kind: LoginKind }> } | undefined
-        const channels = section?.channels ?? {}
-        const exists = Object.values(channels).some(v => v.kind === kind)
-        if (exists) return
-        await sctx.settings.update(NS, {
-          channels: {
-            [`${kind}-1`]: { kind, enabled: true, displayName: `${KIND_LABELS[kind]}机器人 1` },
-          },
+      return await new Promise<boolean>(resolve => {
+        this.ctx.inject(['settings'], async sctx => {
+          try {
+            const section = sctx.settings.get(NS) as { channels?: Record<string, { kind: LoginKind }> } | undefined
+            const channels = section?.channels ?? {}
+            const exists = Object.values(channels).some(v => v.kind === kind)
+            if (exists) {
+              resolve(true)
+              return
+            }
+            await sctx.settings.update(NS, {
+              channels: {
+                [`${kind}-1`]: { kind, enabled: true, displayName: `${KIND_LABELS[kind]}机器人 1` },
+              },
+            })
+            resolve(false)
+          } catch (inner) {
+            // settings 读/写失败：按"已新建"返回，让既有 onChange 链兜底。
+            this.ctx.logger.warn(`im-channel: 自动创建 ${kind} 实例失败: ${messageOf(inner)}`)
+            resolve(false)
+          }
         })
       })
     } catch (error) {
       this.ctx.logger.warn(`im-channel: 自动创建 ${kind} 实例失败: ${messageOf(error)}`)
+      return false
     }
+  }
+
+  /**
+   * 凭证保存成功后让通道尽快上线。两条路：
+   * - wecom 通道在线（activeInstance 存在）→ reconnect() 热替换凭证；
+   * - 其余情况（冷启动：实例先建、凭证后到，通道从未起来；或微信/飞书
+   *   换号需要重开轮询）→ 调 im-channel 服务 reload() 强制重建路由，
+   *   不依赖 settings 变化触发 onChange。
+   */
+  private async bringChannelUp(kind: LoginKind): Promise<void> {
+    if (kind === 'wecom') {
+      const { WecomChannel } = await import('../channels/wecom/index.ts')
+      if (WecomChannel.activeInstance !== undefined) {
+        try {
+          await WecomChannel.activeInstance.reconnect()
+          return
+        } catch (e) {
+          // 重连失败不影响凭证保存；通道在下次重建/重启后生效。
+          this.ctx.logger.warn(`im-channel: 企业微信重连失败: ${messageOf(e)}`)
+          return
+        }
+      }
+    }
+    const service = this.ctx.get('im-channel') as { reload?: () => void } | undefined
+    if (service?.reload === undefined) {
+      this.ctx.logger.warn('im-channel: 路由服务不可用，通道将在重启后生效')
+      return
+    }
+    service.reload()
   }
 
   private handleBindings(res: ServerResponse): void {
@@ -591,7 +625,9 @@ export class LoginApi {
         }
       }
       session.status = 'confirmed'
-      await this.ensureChannelInstance(kind)
+      // 实例已存在（先添加实例、后扫码）时 onChange 不触发，需自行拉起通道。
+      const existed = await this.ensureChannelInstance(kind)
+      if (existed) await this.bringChannelUp(kind)
     } catch (error) {
       session.status = 'error'
       session.error = messageOf(error)
