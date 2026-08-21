@@ -37,6 +37,16 @@ export const zh = {
   'step.wecom.3': '在「API 接收事件」中选择「长连接」模式，复制 BotID 和 Secret。',
   'step.wecom.4': '在下方输入框中粘贴 BotID 和 Secret，点击保存即可连接。',
   'note.wecom': 'BotID 和 Secret 仅保存在本地，不会上传到任何第三方服务器。',
+  'rail.title': '机器人状态',
+  'rail.expand': '展开机器人状态',
+  'rail.collapse': '收起机器人状态',
+  'rail.online': '在线',
+  'rail.offline': '离线',
+  'rail.unbound': '未绑定',
+  'rail.usersSuffix': ' 个绑定用户',
+  'rail.usersNone': '暂无绑定用户',
+  'rail.loadError': '状态获取失败',
+  'rail.retry': '重试',
 } as const
 
 /** en copy for the Bot Channel tab. */
@@ -78,6 +88,16 @@ export const en = {
   'step.wecom.3': 'Under "API Event Receiving", choose "Long Connection" mode, then copy BotID and Secret.',
   'step.wecom.4': 'Paste BotID and Secret in the form below and click Save to connect.',
   'note.wecom': 'BotID and Secret are stored locally and never sent to any third-party server.',
+  'rail.title': 'Bot status',
+  'rail.expand': 'Show bot status',
+  'rail.collapse': 'Hide bot status',
+  'rail.online': 'Online',
+  'rail.offline': 'Offline',
+  'rail.unbound': 'Not set up',
+  'rail.usersSuffix': ' bound users',
+  'rail.usersNone': 'No bound users',
+  'rail.loadError': 'Failed to load status',
+  'rail.retry': 'Retry',
 } as const
 
 export type ImKey = keyof typeof zh

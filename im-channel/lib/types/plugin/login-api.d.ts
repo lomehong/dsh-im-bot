@@ -35,6 +35,8 @@ export declare class LoginApi {
     private handleWecomQrStatus;
     private handleWecomMcpConfigure;
     private handleWecomMcpConfig;
+    /** GET /im-channel/bots/status：三平台机器人状态（配置/在线/账号/绑定用户数）。 */
+    private handleBotsStatus;
     private handleMcpServersList;
     private handleMcpServerAdd;
     /** POST /im-channel/mcp-servers/test {url}：连接测试，返回可达性与工具列表。 */

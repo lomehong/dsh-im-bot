@@ -103,6 +103,12 @@ export class LoginApi {
       path: '/im-channel/mcp-servers',
       handler: (_req: IncomingMessage, res: ServerResponse) => void this.handleMcpServersList(res),
     })
+    // 三平台机器人状态汇总：控制台右缘状态栏数据源（配置/在线/账号/绑定用户数）。
+    web.register({
+      kind: 'exact',
+      path: '/im-channel/bots/status',
+      handler: (_req: IncomingMessage, res: ServerResponse) => void this.handleBotsStatus(res),
+    })
     web.register({
       kind: 'exact',
       path: '/im-channel/mcp-servers/add',
@@ -356,6 +362,20 @@ export class LoginApi {
     } catch (error) {
       respondJson(res, 500, { ok: false, error: messageOf(error) })
     }
+  }
+
+  /** GET /im-channel/bots/status：三平台机器人状态（配置/在线/账号/绑定用户数）。 */
+  private handleBotsStatus(res: ServerResponse): void {
+    void (async () => {
+      try {
+        const service = this.ctx.get('im-channel') as { botsStatus?: () => import('../core/bot-status.ts').ImBotStatus[] } | undefined
+        const { collectBotStatus } = await import('../core/bot-status.ts')
+        const bots = service?.botsStatus?.() ?? collectBotStatus(undefined)
+        respondJson(res, 200, { ok: true, bots })
+      } catch (error) {
+        respondJson(res, 500, { ok: false, error: messageOf(error) })
+      }
+    })()
   }
 
   private async handleMcpServersList(res: ServerResponse): Promise<void> {

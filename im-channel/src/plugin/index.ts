@@ -4,6 +4,7 @@ import z from '@deepseek-ai/schemastery'
 import { BindStore } from '../core/bind-store.ts'
 import { Router, type RouterStatus } from '../core/router.ts'
 import { DEFAULT_GUEST_COMMANDS } from '../core/guest-permissions.ts'
+import { collectBotStatus, type ImBotStatus } from '../core/bot-status.ts'
 import { HarnessDriver } from './driver.ts'
 import { WechatChannel, loadWechatCredentials } from '../channels/wechat/index.ts'
 import { FeishuChannel, loadFeishuCredentials } from '../channels/feishu/index.ts'
@@ -100,6 +101,8 @@ export function apply(ctx: Context, config: ImChannelSection): void {
       if (r === undefined) return Promise.resolve(false)
       return r.pushToUser(kind, userId, text, options)
     },
+    /** 三平台机器人状态汇总（控制台右缘状态栏数据源）。 */
+    botsStatus: (): ImBotStatus[] => collectBotStatus(router?.channels),
   })
   // One driver for the whole plugin lifetime: router rebuilds (settings
   // edits, instance reconciliation) must not orphan bound sessions — the

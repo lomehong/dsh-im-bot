@@ -1,5 +1,6 @@
 export { name, inject, apply, Config } from "./plugin/index.js";
 export { BindStore } from "./core/bind-store.js";
+export { collectBotStatus, defaultBotStatusDeps } from "./core/bot-status.js";
 export { Router } from "./core/router.js";
 export { HarnessDriver } from "./plugin/driver.js";
 export { WechatChannel, loadWechatCredentials } from "./channels/wechat/index.js";

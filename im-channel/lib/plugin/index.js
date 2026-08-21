@@ -3,6 +3,7 @@ import z from '@deepseek-ai/schemastery';
 import { BindStore } from "../core/bind-store.js";
 import { Router } from "../core/router.js";
 import { DEFAULT_GUEST_COMMANDS } from "../core/guest-permissions.js";
+import { collectBotStatus } from "../core/bot-status.js";
 import { HarnessDriver } from "./driver.js";
 import { WechatChannel, loadWechatCredentials } from "../channels/wechat/index.js";
 import { FeishuChannel, loadFeishuCredentials } from "../channels/feishu/index.js";
@@ -72,6 +73,8 @@ export function apply(ctx, config) {
                 return Promise.resolve(false);
             return r.pushToUser(kind, userId, text, options);
         },
+        /** 三平台机器人状态汇总（控制台右缘状态栏数据源）。 */
+        botsStatus: () => collectBotStatus(router?.channels),
     });
     // One driver for the whole plugin lifetime: router rebuilds (settings
     // edits, instance reconciliation) must not orphan bound sessions — the

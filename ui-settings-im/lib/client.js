@@ -2673,6 +2673,210 @@ function BotChannelTab(props) {
   ] });
 }
 
+// src/client/ImBotsRail.tsx
+var import_react5 = require("react");
+var import_jsx_runtime10 = require("react/jsx-runtime");
+var POLL_MS = 3e4;
+var DOT_ONLINE = "#2A9D8F";
+var DOT_OFFLINE = "#B7791F";
+var DOT_UNBOUND = "#B9B9B9";
+function PlatformMark({ kind, size }) {
+  if (kind === "wechat") return /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(WechatMark, { size });
+  if (kind === "feishu") return /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(FeishuMark, { size });
+  return /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(WecomMark, { size });
+}
+function dotColor(bot) {
+  if (bot === void 0) return DOT_UNBOUND;
+  if (!bot.configured) return DOT_UNBOUND;
+  return bot.online ? DOT_ONLINE : DOT_OFFLINE;
+}
+function detailsWidthOf(frame) {
+  const tracks = frame.style.gridTemplateColumns;
+  if (tracks === "") return 0;
+  const last = tracks.trim().split(/\s+/).at(-1) ?? "";
+  const px = Number.parseFloat(last);
+  return Number.isFinite(px) ? Math.max(0, px) : 0;
+}
+function ImBotsRail({ t }) {
+  const [bots, setBots] = (0, import_react5.useState)(void 0);
+  const [loadError, setLoadError] = (0, import_react5.useState)(false);
+  const [expanded, setExpanded] = (0, import_react5.useState)(false);
+  const [detailsWidth, setDetailsWidth] = (0, import_react5.useState)(0);
+  const rootRef = (0, import_react5.useRef)(null);
+  const refresh = (0, import_react5.useCallback)(async () => {
+    try {
+      const resp = await fetch("/im-channel/bots/status");
+      const data = await resp.json();
+      if (data.ok && Array.isArray(data.bots)) {
+        setBots(data.bots);
+        setLoadError(false);
+      } else {
+        setLoadError(true);
+      }
+    } catch {
+      setLoadError(true);
+    }
+  }, []);
+  (0, import_react5.useEffect)(() => {
+    void refresh();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void refresh();
+    }, POLL_MS);
+    const onVisible = () => {
+      if (!document.hidden) void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [refresh]);
+  const toggleExpanded = (0, import_react5.useCallback)(() => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next) void refresh();
+  }, [expanded, refresh]);
+  (0, import_react5.useLayoutEffect)(() => {
+    const root = rootRef.current;
+    if (root === null) return;
+    const frame = root.parentElement?.parentElement ?? null;
+    if (frame === null) return;
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      setDetailsWidth((prev) => {
+        const next = detailsWidthOf(frame);
+        return prev === next ? prev : next;
+      });
+    };
+    const observer = new MutationObserver(() => {
+      if (raf === 0) raf = requestAnimationFrame(measure);
+    });
+    observer.observe(frame, { attributes: true, attributeFilter: ["style"] });
+    measure();
+    return () => {
+      observer.disconnect();
+      if (raf !== 0) cancelAnimationFrame(raf);
+    };
+  }, []);
+  const order = ["wechat", "feishu", "wecom"];
+  const byKind = new Map(bots?.map((b) => [b.kind, b]) ?? []);
+  return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(
+    "div",
+    {
+      ref: rootRef,
+      style: {
+        position: "absolute",
+        top: "50%",
+        transform: "translateY(-50%)",
+        right: `${detailsWidth}px`,
+        transition: "right var(--ds-transition-duration-slow, 0.3s) var(--ds-ease-in-out, ease-in-out)",
+        pointerEvents: "auto",
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      },
+      children: [
+        expanded && /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(
+          "div",
+          {
+            role: "status",
+            style: {
+              width: 268,
+              borderRadius: 12,
+              padding: "12px 14px",
+              background: "var(--dsw-alias-bg-base, #fff)",
+              border: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
+              boxShadow: "0 6px 24px rgba(0, 0, 0, 0.14)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+              color: "inherit"
+            },
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }, children: [
+                /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { style: { fontSize: 13, fontWeight: 600 }, children: t("rail.title") }),
+                /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(
+                  "button",
+                  {
+                    type: "button",
+                    "aria-label": t("rail.collapse"),
+                    onClick: toggleExpanded,
+                    style: { border: "none", background: "none", cursor: "pointer", color: "inherit", fontSize: 13, padding: "2px 4px" },
+                    children: "\u203A"
+                  }
+                )
+              ] }),
+              loadError && bots === void 0 && /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { fontSize: 12, color: DOT_OFFLINE, display: "flex", gap: 8, alignItems: "center" }, children: [
+                t("rail.loadError"),
+                /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("button", { type: "button", onClick: () => {
+                  void refresh();
+                }, style: { border: "none", background: "none", cursor: "pointer", color: "inherit", fontSize: 12, textDecoration: "underline", padding: 0 }, children: t("rail.retry") })
+              ] }),
+              order.map((kind) => {
+                const bot = byKind.get(kind);
+                const statusText = bot === void 0 || !bot.configured ? t("rail.unbound") : bot.online ? t("rail.online") : t("rail.offline");
+                return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "7px 2px", opacity: bot !== void 0 && bot.configured ? 1 : 0.55 }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(PlatformMark, { kind, size: 24 }),
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { flex: 1, minWidth: 0 }, children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("div", { style: { fontSize: 13, fontWeight: 500 }, children: bot?.label ?? kind }),
+                    /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("div", { style: { fontSize: 11, opacity: 0.65, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: bot?.account ?? "\u2014" }),
+                    /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("div", { style: { fontSize: 11, opacity: 0.75 }, children: bot !== void 0 && bot.configured ? bot.boundUsers > 0 ? `${bot.boundUsers}${t("rail.usersSuffix")}` : t("rail.usersNone") : t("rail.unbound") })
+                  ] }),
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { title: statusText, style: { width: 9, height: 9, borderRadius: "50%", flex: "none", background: dotColor(bot) } }),
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { style: { fontSize: 11, opacity: 0.75, flex: "none" }, children: statusText })
+                ] }, kind);
+              })
+            ]
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(
+          "button",
+          {
+            type: "button",
+            "aria-expanded": expanded,
+            "aria-label": expanded ? t("rail.collapse") : t("rail.expand"),
+            title: expanded ? t("rail.collapse") : t("rail.expand"),
+            onClick: toggleExpanded,
+            style: {
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 8,
+              padding: "10px 5px",
+              border: "none",
+              cursor: "pointer",
+              borderRadius: "10px 0 0 10px",
+              background: "var(--dsw-alias-bg-base, #fff)",
+              borderLeft: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
+              borderTop: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
+              borderBottom: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
+              boxShadow: "-3px 3px 14px rgba(0, 0, 0, 0.12)",
+              color: "inherit"
+            },
+            children: [
+              order.map((kind) => {
+                const bot = byKind.get(kind);
+                return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("span", { style: { position: "relative", display: "inline-flex" }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(PlatformMark, { kind, size: 18 }),
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(
+                    "span",
+                    {
+                      "aria-hidden": true,
+                      style: { position: "absolute", right: -3, bottom: -2, width: 8, height: 8, borderRadius: "50%", background: dotColor(bot), boxShadow: "0 0 0 2px var(--dsw-alias-bg-base, #fff)" }
+                    }
+                  )
+                ] }, kind);
+              }),
+              /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { "aria-hidden": true, style: { fontSize: 11, lineHeight: 1 }, children: expanded ? "\u203A" : "\u2039" })
+            ]
+          }
+        )
+      ]
+    }
+  );
+}
+
 // src/client/locales.ts
 var zh = {
   nav: "\u624B\u673A\u8FDE\u63A5",
@@ -2711,7 +2915,17 @@ var zh = {
   "step.wecom.2": "\u8FDB\u5165\u300C\u5E94\u7528 \u2192 \u667A\u80FD\u673A\u5668\u4EBA\u300D\u9875\u9762\uFF0C\u521B\u5EFA\u6216\u9009\u4E2D\u4E00\u4E2A\u673A\u5668\u4EBA\u3002",
   "step.wecom.3": "\u5728\u300CAPI \u63A5\u6536\u4E8B\u4EF6\u300D\u4E2D\u9009\u62E9\u300C\u957F\u8FDE\u63A5\u300D\u6A21\u5F0F\uFF0C\u590D\u5236 BotID \u548C Secret\u3002",
   "step.wecom.4": "\u5728\u4E0B\u65B9\u8F93\u5165\u6846\u4E2D\u7C98\u8D34 BotID \u548C Secret\uFF0C\u70B9\u51FB\u4FDD\u5B58\u5373\u53EF\u8FDE\u63A5\u3002",
-  "note.wecom": "BotID \u548C Secret \u4EC5\u4FDD\u5B58\u5728\u672C\u5730\uFF0C\u4E0D\u4F1A\u4E0A\u4F20\u5230\u4EFB\u4F55\u7B2C\u4E09\u65B9\u670D\u52A1\u5668\u3002"
+  "note.wecom": "BotID \u548C Secret \u4EC5\u4FDD\u5B58\u5728\u672C\u5730\uFF0C\u4E0D\u4F1A\u4E0A\u4F20\u5230\u4EFB\u4F55\u7B2C\u4E09\u65B9\u670D\u52A1\u5668\u3002",
+  "rail.title": "\u673A\u5668\u4EBA\u72B6\u6001",
+  "rail.expand": "\u5C55\u5F00\u673A\u5668\u4EBA\u72B6\u6001",
+  "rail.collapse": "\u6536\u8D77\u673A\u5668\u4EBA\u72B6\u6001",
+  "rail.online": "\u5728\u7EBF",
+  "rail.offline": "\u79BB\u7EBF",
+  "rail.unbound": "\u672A\u7ED1\u5B9A",
+  "rail.usersSuffix": " \u4E2A\u7ED1\u5B9A\u7528\u6237",
+  "rail.usersNone": "\u6682\u65E0\u7ED1\u5B9A\u7528\u6237",
+  "rail.loadError": "\u72B6\u6001\u83B7\u53D6\u5931\u8D25",
+  "rail.retry": "\u91CD\u8BD5"
 };
 var en = {
   nav: "Mobile Connect",
@@ -2750,7 +2964,17 @@ var en = {
   "step.wecom.2": 'Go to "Apps \u2192 Intelligent Bot" and create or select a bot.',
   "step.wecom.3": 'Under "API Event Receiving", choose "Long Connection" mode, then copy BotID and Secret.',
   "step.wecom.4": "Paste BotID and Secret in the form below and click Save to connect.",
-  "note.wecom": "BotID and Secret are stored locally and never sent to any third-party server."
+  "note.wecom": "BotID and Secret are stored locally and never sent to any third-party server.",
+  "rail.title": "Bot status",
+  "rail.expand": "Show bot status",
+  "rail.collapse": "Hide bot status",
+  "rail.online": "Online",
+  "rail.offline": "Offline",
+  "rail.unbound": "Not set up",
+  "rail.usersSuffix": " bound users",
+  "rail.usersNone": "No bound users",
+  "rail.loadError": "Failed to load status",
+  "rail.retry": "Retry"
 };
 
 // src/client/store.ts
@@ -2771,6 +2995,13 @@ function apply(ctx) {
     locale: NS,
     inject: injected
   }, BotChannelTab));
+  ctx.slots.inject("shell.overlay", () => ctx.slots.register({
+    name: "shell.overlay",
+    id: "im-bots-rail",
+    order: 100,
+    locale: NS,
+    inject: () => ({ t: (key) => t(key) })
+  }, ImBotsRail));
 }
 		return module.exports;
 	}
