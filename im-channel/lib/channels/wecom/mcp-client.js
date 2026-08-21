@@ -14,6 +14,7 @@
 export class McpClient {
     serverName;
     url;
+    timeoutMs;
     requestId = 1;
     toolsCache;
     cacheExpiresAt = 0;
@@ -21,6 +22,7 @@ export class McpClient {
     constructor(config) {
         this.serverName = config.name;
         this.url = config.url;
+        this.timeoutMs = config.timeoutMs;
     }
     get name() {
         return this.serverName;
@@ -41,6 +43,7 @@ export class McpClient {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
             body,
+            ...(this.timeoutMs !== undefined ? { signal: AbortSignal.timeout(this.timeoutMs) } : {}),
         });
         if (!response.ok) {
             throw new Error(`MCP 请求失败: ${response.status} ${response.statusText}`);

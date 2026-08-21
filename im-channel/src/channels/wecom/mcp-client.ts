@@ -22,12 +22,15 @@ export interface McpTool {
 export interface McpServerConfig {
   name: string
   url: string
+  /** 单次请求超时（毫秒）；缺省不限制（保持既有行为）。连接测试时建议设置。 */
+  timeoutMs?: number
 }
 
 /** MCP 客户端 */
 export class McpClient {
   private readonly serverName: string
   private readonly url: string
+  private readonly timeoutMs: number | undefined
   private requestId = 1
   private toolsCache: McpTool[] | undefined
   private cacheExpiresAt = 0
@@ -36,6 +39,7 @@ export class McpClient {
   constructor(config: McpServerConfig) {
     this.serverName = config.name
     this.url = config.url
+    this.timeoutMs = config.timeoutMs
   }
 
   get name(): string {
@@ -59,6 +63,7 @@ export class McpClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body,
+      ...(this.timeoutMs !== undefined ? { signal: AbortSignal.timeout(this.timeoutMs) } : {}),
     })
     if (!response.ok) {
       throw new Error(`MCP 请求失败: ${response.status} ${response.statusText}`)

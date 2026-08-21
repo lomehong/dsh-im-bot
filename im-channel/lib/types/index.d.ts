@@ -10,5 +10,5 @@ export { FeishuChannel, loadFeishuCredentials, saveFeishuCredentials } from './c
 export type { FeishuCredentials } from './channels/feishu/index.ts';
 export { WecomChannel, loadWecomCredentials, saveWecomCredentials, loadWecomMcpConfig, saveWecomMcpConfig } from './channels/wecom/index.ts';
 export type { WecomCredentials, WecomMcpConfig } from './channels/wecom/index.ts';
-export { loadMcpServers, getEnabledMcpServers, addMcpServer, updateMcpServer, removeMcpServer } from './channels/mcp-server-manager.ts';
-export type { McpServerEntry, McpServersConfig } from './channels/mcp-server-manager.ts';
+export { loadMcpServers, getEnabledMcpServers, addMcpServer, updateMcpServer, removeMcpServer, parseMcpImport, testMcpServer, normalizeMcpUrl, defaultNameFromUrl, McpManagerError } from './channels/mcp-server-manager.ts';
+export type { McpServerEntry, McpServersConfig, AddMcpServerInput, McpImportCandidate, McpUnsupportedCandidate, McpImportResult, McpTestResult } from './channels/mcp-server-manager.ts';

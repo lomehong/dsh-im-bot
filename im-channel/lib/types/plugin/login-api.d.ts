@@ -37,6 +37,10 @@ export declare class LoginApi {
     private handleWecomMcpConfig;
     private handleMcpServersList;
     private handleMcpServerAdd;
+    /** POST /im-channel/mcp-servers/test {url}：连接测试，返回可达性与工具列表。 */
+    private handleMcpServerTest;
+    /** POST /im-channel/mcp-servers/parse {text}：解析粘贴的 URL/JSON 为候选列表。 */
+    private handleMcpServerParse;
     private handleMcpServerUpdate;
     private handleMcpServerRemove;
     /**

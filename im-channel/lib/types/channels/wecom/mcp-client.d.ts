@@ -20,11 +20,14 @@ export interface McpTool {
 export interface McpServerConfig {
     name: string;
     url: string;
+    /** 单次请求超时（毫秒）；缺省不限制（保持既有行为）。连接测试时建议设置。 */
+    timeoutMs?: number;
 }
 /** MCP 客户端 */
 export declare class McpClient {
     private readonly serverName;
     private readonly url;
+    private readonly timeoutMs;
     private requestId;
     private toolsCache;
     private cacheExpiresAt;

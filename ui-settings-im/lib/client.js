@@ -1960,39 +1960,145 @@ var btnStyle = {
 };
 var smallBtn = { ...btnStyle, padding: "4px 10px", fontSize: "12px" };
 var dangerBtn = { ...smallBtn, backgroundColor: "#E76F51" };
+var ghostBtn = { ...smallBtn, backgroundColor: "#fff", color: "#555", border: "1px solid #ccc" };
+var badgeStyle = {
+  display: "inline-block",
+  padding: "2px 8px",
+  borderRadius: "10px",
+  fontSize: "11px",
+  whiteSpace: "nowrap"
+};
+function TestBadge({ test }) {
+  if (test.state === "idle") return /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", {});
+  if (test.state === "testing") {
+    return /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { ...badgeStyle, backgroundColor: "#F4F4F4", color: "#888" }, children: "\u23F3 \u6D4B\u8BD5\u4E2D\u2026" });
+  }
+  if (test.state === "ok") {
+    return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("span", { style: { ...badgeStyle, backgroundColor: "#E4F5F2", color: "#2A9D8F" }, children: [
+      "\u2705 ",
+      test.toolCount,
+      " \u4E2A\u5DE5\u5177"
+    ] });
+  }
+  return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("span", { title: test.error, style: { ...badgeStyle, backgroundColor: "#FDEEE8", color: "#E76F51", maxWidth: "260px", overflow: "hidden", textOverflow: "ellipsis" }, children: [
+    "\u274C ",
+    test.error
+  ] });
+}
 function McpServersPanel() {
   const [servers, setServers] = (0, import_react2.useState)([]);
-  const [newName, setNewName] = (0, import_react2.useState)("");
-  const [newType, setNewType] = (0, import_react2.useState)("streamable-http");
-  const [newUrl, setNewUrl] = (0, import_react2.useState)("");
   const [status, setStatus] = (0, import_react2.useState)(void 0);
-  const loadServers = () => {
+  const [importText, setImportText] = (0, import_react2.useState)("");
+  const [candidates, setCandidates] = (0, import_react2.useState)([]);
+  const [unsupported, setUnsupported] = (0, import_react2.useState)([]);
+  const [invalidLines, setInvalidLines] = (0, import_react2.useState)([]);
+  const [parsing, setParsing] = (0, import_react2.useState)(false);
+  const [importing, setImporting] = (0, import_react2.useState)(false);
+  const [rowTests, setRowTests] = (0, import_react2.useState)({});
+  const [editingId, setEditingId] = (0, import_react2.useState)(void 0);
+  const [editName, setEditName] = (0, import_react2.useState)("");
+  const [editUrl, setEditUrl] = (0, import_react2.useState)("");
+  const [confirmDeleteId, setConfirmDeleteId] = (0, import_react2.useState)(void 0);
+  const loadServers = (0, import_react2.useCallback)(() => {
     fetch("/im-channel/mcp-servers").then((r) => r.json()).then((data) => {
       if (data.ok) setServers(data.servers);
     }).catch(() => {
     });
-  };
-  (0, import_react2.useEffect)(loadServers, []);
-  const addServer = async () => {
-    if (!newName.trim() || !newUrl.trim()) return;
+  }, []);
+  (0, import_react2.useEffect)(loadServers, [loadServers]);
+  const runTest = async (url) => {
     try {
-      const resp = await fetch("/im-channel/mcp-servers/add", {
+      const resp = await fetch("/im-channel/mcp-servers/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName.trim(), type: newType.trim(), url: newUrl.trim() })
+        body: JSON.stringify({ url })
       });
       const data = await resp.json();
-      if (data.ok) {
-        setNewName("");
-        setNewUrl("");
-        setStatus("added");
-        loadServers();
-      } else {
-        setStatus("error: " + (data.error ?? "\u6DFB\u52A0\u5931\u8D25"));
+      if (data.ok && data.result?.ok === true) {
+        return { state: "ok", toolCount: data.result.toolCount ?? 0 };
       }
+      return { state: "fail", error: data.result?.error ?? data.error ?? "\u6D4B\u8BD5\u5931\u8D25" };
     } catch (err) {
-      setStatus("error: " + (err instanceof Error ? err.message : String(err)));
+      return { state: "fail", error: err instanceof Error ? err.message : String(err) };
     }
+  };
+  const parseInput = async (silent, textOverride) => {
+    const text = (textOverride ?? importText).trim();
+    if (text === "") {
+      if (!silent) setStatus({ kind: "error", text: "\u8BF7\u5148\u7C98\u8D34 MCP \u670D\u52A1\u5668\u5730\u5740\u6216\u914D\u7F6E" });
+      return;
+    }
+    setParsing(true);
+    try {
+      const resp = await fetch("/im-channel/mcp-servers/parse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text })
+      });
+      const data = await resp.json();
+      if (!data.ok) {
+        setStatus({ kind: "error", text: data.error ?? "\u89E3\u6790\u5931\u8D25" });
+        return;
+      }
+      const parsed = data.candidates ?? [];
+      const bad = data.invalid ?? [];
+      const unsup = data.unsupported ?? [];
+      if (silent && parsed.length === 0 && bad.length === 0 && unsup.length === 0) return;
+      if (parsed.length === 0 && bad.length === 0 && unsup.length === 0) {
+        setStatus({ kind: "error", text: "\u6CA1\u6709\u8BC6\u522B\u51FA MCP \u670D\u52A1\u5668\uFF1A\u652F\u6301 http(s) \u5730\u5740\uFF08\u6BCF\u884C\u4E00\u4E2A\uFF09\u6216 mcpServers JSON \u914D\u7F6E" });
+        return;
+      }
+      const initial = parsed.map((c) => ({ name: c.name, url: c.url, selected: true, test: { state: "idle" } }));
+      setCandidates(initial);
+      setUnsupported(unsup);
+      setInvalidLines(bad);
+      initial.forEach((c, index) => {
+        setCandidates((prev) => prev.map((item, i) => i === index ? { ...item, test: { state: "testing" } } : item));
+        void runTest(c.url).then((result) => {
+          setCandidates((prev) => prev.map((item, i) => i === index ? { ...item, test: result } : item));
+        });
+      });
+    } catch (err) {
+      setStatus({ kind: "error", text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setParsing(false);
+    }
+  };
+  const addSelected = async () => {
+    const chosen = candidates.filter((c) => c.selected);
+    if (chosen.length === 0) return;
+    setImporting(true);
+    let added = 0;
+    let skipped = 0;
+    const failures = [];
+    for (const c of chosen) {
+      try {
+        const resp = await fetch("/im-channel/mcp-servers/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: c.name.trim() === "" ? void 0 : c.name.trim(), type: "streamable-http", url: c.url })
+        });
+        const data = await resp.json();
+        if (data.ok) added++;
+        else if (data.code === "duplicate") skipped++;
+        else failures.push(`${c.name}: ${data.error ?? "\u6DFB\u52A0\u5931\u8D25"}`);
+      } catch (err) {
+        failures.push(`${c.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    setImporting(false);
+    if (added > 0 || skipped > 0) {
+      setImportText("");
+      setCandidates([]);
+      setUnsupported([]);
+      setInvalidLines([]);
+    }
+    const parts = [];
+    if (added > 0) parts.push(`\u5DF2\u6DFB\u52A0 ${added} \u4E2A`);
+    if (skipped > 0) parts.push(`\u8DF3\u8FC7\u91CD\u590D ${skipped} \u4E2A`);
+    if (failures.length > 0) parts.push(`\u5931\u8D25 ${failures.length} \u4E2A\uFF08${failures[0]}\uFF09`);
+    if (parts.length > 0) setStatus({ kind: failures.length > 0 && added === 0 ? "error" : "ok", text: parts.join("\uFF0C") });
+    loadServers();
   };
   const removeServer = async (id) => {
     try {
@@ -2003,11 +2109,12 @@ function McpServersPanel() {
       });
       const data = await resp.json();
       if (data.ok) {
-        setStatus("removed");
+        setStatus({ kind: "ok", text: "\u5DF2\u5220\u9664" });
+        setConfirmDeleteId(void 0);
         loadServers();
       }
     } catch (err) {
-      setStatus("error: " + (err instanceof Error ? err.message : String(err)));
+      setStatus({ kind: "error", text: err instanceof Error ? err.message : String(err) });
     }
   };
   const toggleServer = async (server) => {
@@ -2020,16 +2127,141 @@ function McpServersPanel() {
       const data = await resp.json();
       if (data.ok) loadServers();
     } catch (err) {
-      setStatus("error: " + (err instanceof Error ? err.message : String(err)));
+      setStatus({ kind: "error", text: err instanceof Error ? err.message : String(err) });
     }
   };
+  const testRow = async (server) => {
+    setRowTests((prev) => ({ ...prev, [server.id]: { state: "testing" } }));
+    const result = await runTest(server.url);
+    setRowTests((prev) => ({ ...prev, [server.id]: result }));
+  };
+  const startEdit = (server) => {
+    setEditingId(server.id);
+    setEditName(server.name);
+    setEditUrl(server.url);
+    setConfirmDeleteId(void 0);
+  };
+  const saveEdit = async () => {
+    if (editingId === void 0) return;
+    if (editName.trim() === "" || editUrl.trim() === "") {
+      setStatus({ kind: "error", text: "\u540D\u79F0\u548C URL \u4E0D\u80FD\u4E3A\u7A7A" });
+      return;
+    }
+    try {
+      const resp = await fetch("/im-channel/mcp-servers/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: editingId, name: editName.trim(), url: editUrl.trim() })
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        setEditingId(void 0);
+        setStatus({ kind: "ok", text: "\u5DF2\u4FDD\u5B58" });
+        loadServers();
+      } else {
+        setStatus({ kind: "error", text: data.error ?? "\u4FDD\u5B58\u5931\u8D25" });
+      }
+    } catch (err) {
+      setStatus({ kind: "error", text: err instanceof Error ? err.message : String(err) });
+    }
+  };
+  const selectedCount = candidates.filter((c) => c.selected).length;
   return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { marginTop: "24px", padding: "16px", borderTop: "1px solid #ddd" }, children: [
     /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" }, children: "MCP \u670D\u52A1\u5668\u7BA1\u7406" }),
-    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { style: { fontSize: "12px", color: "#888", marginBottom: "12px" }, children: "\u914D\u7F6E MCP \u670D\u52A1\u5668\uFF0C\u4E3A AI \u52A9\u624B\u63D0\u4F9B\u65E5\u7A0B\u3001\u5F85\u529E\u3001\u4F1A\u8BAE\u7B49\u5916\u90E8\u5DE5\u5177\u80FD\u529B\u3002" }),
-    servers.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { style: { marginBottom: "16px" }, children: servers.map((s) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: "8px", padding: "8px", borderBottom: "1px solid #eee", fontSize: "13px" }, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { style: { fontSize: "12px", color: "#888", marginBottom: "12px" }, children: "\u914D\u7F6E MCP \u670D\u52A1\u5668\uFF0C\u4E3A AI \u52A9\u624B\u63D0\u4F9B\u65E5\u7A0B\u3001\u5F85\u529E\u3001\u4F1A\u8BAE\u7B49\u5916\u90E8\u5DE5\u5177\u80FD\u529B\u3002\u76F4\u63A5\u7C98\u8D34\u5730\u5740\u5373\u53EF\u6DFB\u52A0\uFF0C\u4FDD\u5B58\u524D\u81EA\u52A8\u6D4B\u8BD5\u8FDE\u63A5\u3002" }),
+    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { style: { marginBottom: "8px" }, children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+      "textarea",
+      {
+        placeholder: '\u7C98\u8D34 MCP \u670D\u52A1\u5668\u5730\u5740\uFF08\u6BCF\u884C\u4E00\u4E2A\uFF09\uFF0C\u6216\u6807\u51C6 mcpServers JSON \u914D\u7F6E\uFF0C\u4F8B\u5982\uFF1A\nhttps://mcp.example.com/mcp\n{"mcpServers": { "\u5F85\u529E": { "url": "https://\u2026" } }}',
+        value: importText,
+        onChange: (e) => setImportText(e.target.value),
+        onPaste: (e) => {
+          const pasted = e.clipboardData.getData("text");
+          if (pasted.trim() !== "") setTimeout(() => {
+            void parseInput(true, pasted);
+          }, 50);
+        },
+        style: { ...formFieldStyle2, fontFamily: "inherit", resize: "vertical", minHeight: "64px" }
+      }
+    ) }),
+    /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { display: "flex", gap: "8px", alignItems: "center", marginBottom: "12px" }, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: btnStyle, disabled: parsing || importText.trim() === "", onClick: () => {
+        void parseInput(false);
+      }, children: parsing ? "\u89E3\u6790\u4E2D\u2026" : "\u89E3\u6790\u5E76\u9884\u89C8" }),
+      importText !== "" && candidates.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: ghostBtn, onClick: () => setImportText(""), children: "\u6E05\u7A7A" }),
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { fontSize: "11px", color: "#aaa" }, children: "\u652F\u6301 Claude Code / Cursor \u7684 mcpServers JSON \u683C\u5F0F\u4E0E\u88F8 URL" })
+    ] }),
+    candidates.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { border: "1px solid #E5E5E5", borderRadius: "6px", padding: "8px 12px", marginBottom: "12px", backgroundColor: "#FAFAFA" }, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { fontSize: "12px", color: "#666", margin: "4px 0 8px" }, children: [
+        "\u8BC6\u522B\u51FA ",
+        candidates.length,
+        " \u4E2A\u670D\u52A1\u5668\uFF08\u5DF2\u81EA\u52A8\u6D4B\u8BD5\u8FDE\u63A5\uFF0C\u53EF\u4FEE\u6539\u540D\u79F0\uFF09"
+      ] }),
+      candidates.map((c, index) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: "8px", padding: "6px 0", borderBottom: "1px solid #eee", fontSize: "13px" }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          "input",
+          {
+            type: "checkbox",
+            checked: c.selected,
+            "aria-label": `\u9009\u62E9 ${c.name}`,
+            onChange: (e) => setCandidates((prev) => prev.map((item, i) => i === index ? { ...item, selected: e.target.checked } : item))
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          "input",
+          {
+            value: c.name,
+            "aria-label": "\u670D\u52A1\u5668\u540D\u79F0",
+            onChange: (e) => setCandidates((prev) => prev.map((item, i) => i === index ? { ...item, name: e.target.value } : item)),
+            style: { flex: "0 0 150px", padding: "4px 8px", border: "1px solid #ddd", borderRadius: "4px" }
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { flex: 1, color: "#666", fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: c.url, children: c.url }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(TestBadge, { test: c.test })
+      ] }, c.url)),
+      unsupported.map((u) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { display: "flex", gap: "8px", padding: "6px 0", fontSize: "12px", color: "#B7791F" }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("span", { children: [
+          "\u26A0\uFE0F ",
+          u.name,
+          "\uFF08",
+          u.rawType,
+          "\uFF09"
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { flex: 1 }, children: u.reason })
+      ] }, u.name)),
+      invalidLines.map((line, i) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { padding: "4px 0", fontSize: "12px", color: "#E76F51" }, children: [
+        "\u2717 \u65E0\u6CD5\u8BC6\u522B\uFF1A",
+        line
+      ] }, `${i}-${line.slice(0, 20)}`)),
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { display: "flex", gap: "8px", marginTop: "8px" }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: btnStyle, disabled: importing || selectedCount === 0, onClick: () => {
+          void addSelected();
+        }, children: importing ? "\u6DFB\u52A0\u4E2D\u2026" : `\u6DFB\u52A0\u6240\u9009\uFF08${selectedCount}\uFF09` }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: ghostBtn, disabled: importing, onClick: () => {
+          setCandidates([]);
+          setUnsupported([]);
+          setInvalidLines([]);
+        }, children: "\u53D6\u6D88" })
+      ] })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { fontSize: "13px", fontWeight: "500", color: "#555", marginBottom: "4px" }, children: [
+      "\u5DF2\u6709\u670D\u52A1\u5668\uFF08",
+      servers.length,
+      "\uFF09"
+    ] }),
+    servers.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { style: { color: "#999", fontSize: "13px", marginBottom: "12px" }, children: "\u6682\u65E0 MCP \u670D\u52A1\u5668\u2014\u2014\u5728\u4E0A\u65B9\u7C98\u8D34\u4E00\u4E2A MCP \u670D\u52A1\u5668\u5730\u5740\u8BD5\u8BD5" }),
+    servers.map((s) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { style: { display: "flex", alignItems: "center", gap: "8px", padding: "8px", borderBottom: "1px solid #eee", fontSize: "13px", flexWrap: "wrap" }, children: editingId === s.id ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("input", { value: editName, "aria-label": "\u540D\u79F0", onChange: (e) => setEditName(e.target.value), style: { flex: "0 0 140px", padding: "4px 8px", border: "1px solid #ddd", borderRadius: "4px" } }),
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("input", { value: editUrl, "aria-label": "URL", onChange: (e) => setEditUrl(e.target.value), style: { flex: 2, minWidth: "200px", padding: "4px 8px", border: "1px solid #ddd", borderRadius: "4px" } }),
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: smallBtn, onClick: () => {
+        void saveEdit();
+      }, children: "\u4FDD\u5B58" }),
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: ghostBtn, onClick: () => setEditingId(void 0), children: "\u53D6\u6D88" })
+    ] }) : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
       /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
         "span",
         {
+          title: s.enabled ? "\u70B9\u51FB\u505C\u7528" : "\u70B9\u51FB\u542F\u7528",
           style: { cursor: "pointer", fontSize: "16px", userSelect: "none" },
           onClick: () => {
             void toggleServer(s);
@@ -2038,27 +2270,23 @@ function McpServersPanel() {
         }
       ),
       /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { flex: "0 0 120px", fontWeight: "500" }, children: s.name }),
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { flex: "0 0 140px", color: "#888", fontSize: "12px" }, children: s.type }),
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { flex: 1, color: "#666", fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: s.url }),
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: dangerBtn, onClick: () => {
-        void removeServer(s.id);
-      }, children: "\u5220\u9664" })
-    ] }, s.id)) }),
-    servers.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { style: { color: "#999", fontSize: "13px", marginBottom: "12px" }, children: "\u6682\u65E0 MCP \u670D\u52A1\u5668\u914D\u7F6E" }),
-    /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { display: "flex", gap: "8px", alignItems: "flex-end", flexWrap: "wrap" }, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { style: { flex: "1 1 150px" }, children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("input", { placeholder: "\u540D\u79F0", value: newName, onChange: (e) => setNewName(e.target.value), style: formFieldStyle2 }) }),
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { style: { flex: "0 0 150px" }, children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("select", { value: newType, onChange: (e) => setNewType(e.target.value), style: formFieldStyle2, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "streamable-http", children: "streamable-http" }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "stdio", children: "stdio" })
-      ] }) }),
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { style: { flex: "2 1 250px" }, children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("input", { placeholder: "URL\uFF08MCP \u670D\u52A1\u5668\u5730\u5740\uFF09", value: newUrl, onChange: (e) => setNewUrl(e.target.value), style: formFieldStyle2 }) }),
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: { ...btnStyle, marginBottom: "12px" }, onClick: () => {
-        void addServer();
-      }, children: "\u6DFB\u52A0\u670D\u52A1\u5668" })
-    ] }),
-    status === "added" && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { style: { color: "#2A9D8F", fontSize: "12px", marginTop: "8px" }, children: "\u2705 MCP \u670D\u52A1\u5668\u5DF2\u6DFB\u52A0" }),
-    status === "removed" && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { style: { color: "#2A9D8F", fontSize: "12px", marginTop: "8px" }, children: "\u5DF2\u5220\u9664" }),
-    typeof status === "string" && status.startsWith("error:") && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "alert", style: { color: "#E76F51", fontSize: "12px", marginTop: "8px" }, children: status.slice(6) })
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { flex: 1, color: "#666", fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: s.url, children: s.url }),
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(TestBadge, { test: rowTests[s.id] ?? { state: "idle" } }),
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: ghostBtn, onClick: () => {
+        void testRow(s);
+      }, children: "\u6D4B\u8BD5" }),
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: ghostBtn, onClick: () => startEdit(s), children: "\u7F16\u8F91" }),
+      confirmDeleteId === s.id ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: dangerBtn, onClick: () => {
+          void removeServer(s.id);
+        }, children: "\u786E\u8BA4\u5220\u9664" }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: ghostBtn, onClick: () => setConfirmDeleteId(void 0), children: "\u53D6\u6D88" })
+      ] }) : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: ghostBtn, onClick: () => setConfirmDeleteId(s.id), children: "\u5220\u9664" })
+    ] }) }, s.id)),
+    status !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("p", { role: "alert", style: { color: status.kind === "ok" ? "#2A9D8F" : "#E76F51", fontSize: "12px", marginTop: "8px" }, children: [
+      status.kind === "ok" ? "\u2705 " : "",
+      status.text
+    ] })
   ] });
 }
 

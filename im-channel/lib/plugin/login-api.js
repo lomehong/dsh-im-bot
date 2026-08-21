@@ -84,6 +84,18 @@ export class LoginApi {
             path: '/im-channel/mcp-servers/add',
             handler: (req, res) => void this.handleMcpServerAdd(req, res),
         });
+        // 连接测试：按运行时相同方式调用 tools/list，探测可达性与工具列表。
+        web.register({
+            kind: 'exact',
+            path: '/im-channel/mcp-servers/test',
+            handler: (req, res) => void this.handleMcpServerTest(req, res),
+        });
+        // 粘贴解析：把裸 URL / mcpServers JSON 文本解析为候选列表（预览后批量导入）。
+        web.register({
+            kind: 'exact',
+            path: '/im-channel/mcp-servers/parse',
+            handler: (req, res) => void this.handleMcpServerParse(req, res),
+        });
         web.register({
             kind: 'exact',
             path: '/im-channel/mcp-servers/update',
@@ -337,15 +349,15 @@ export class LoginApi {
         }
     }
     async handleMcpServerAdd(req, res) {
+        const { addMcpServer, McpManagerError } = await import("../channels/mcp-server-manager.js");
         try {
             const body = await readJsonBody(req);
-            if (typeof body.name !== 'string' || typeof body.url !== 'string') {
-                respondJson(res, 400, { ok: false, error: '需要 name 和 url' });
+            if (typeof body.url !== 'string' || body.url.trim() === '') {
+                respondJson(res, 400, { ok: false, error: '需要 url（name 可省略，自动从地址生成）' });
                 return;
             }
-            const { addMcpServer } = await import("../channels/mcp-server-manager.js");
             const entry = addMcpServer({
-                name: body.name,
+                ...(typeof body.name === 'string' && body.name.trim() !== '' ? { name: body.name.trim() } : {}),
                 type: body.type ?? 'streamable-http',
                 url: body.url,
                 enabled: true,
@@ -353,17 +365,53 @@ export class LoginApi {
             respondJson(res, 200, { ok: true, server: entry });
         }
         catch (error) {
+            if (error instanceof McpManagerError) {
+                respondJson(res, 400, { ok: false, error: error.message, code: error.code });
+                return;
+            }
+            respondJson(res, 500, { ok: false, error: messageOf(error) });
+        }
+    }
+    /** POST /im-channel/mcp-servers/test {url}：连接测试，返回可达性与工具列表。 */
+    async handleMcpServerTest(req, res) {
+        try {
+            const body = await readJsonBody(req);
+            if (typeof body.url !== 'string' || body.url.trim() === '') {
+                respondJson(res, 400, { ok: false, error: '需要 url' });
+                return;
+            }
+            const { testMcpServer } = await import("../channels/mcp-server-manager.js");
+            const result = await testMcpServer(body.url);
+            respondJson(res, 200, { ok: true, result });
+        }
+        catch (error) {
+            respondJson(res, 500, { ok: false, error: messageOf(error) });
+        }
+    }
+    /** POST /im-channel/mcp-servers/parse {text}：解析粘贴的 URL/JSON 为候选列表。 */
+    async handleMcpServerParse(req, res) {
+        try {
+            const body = await readJsonBody(req);
+            if (typeof body.text !== 'string') {
+                respondJson(res, 400, { ok: false, error: '需要 text' });
+                return;
+            }
+            const { parseMcpImport } = await import("../channels/mcp-server-manager.js");
+            const result = parseMcpImport(body.text);
+            respondJson(res, 200, { ok: true, ...result });
+        }
+        catch (error) {
             respondJson(res, 500, { ok: false, error: messageOf(error) });
         }
     }
     async handleMcpServerUpdate(req, res) {
+        const { updateMcpServer, McpManagerError } = await import("../channels/mcp-server-manager.js");
         try {
             const body = await readJsonBody(req);
             if (typeof body.id !== 'string') {
                 respondJson(res, 400, { ok: false, error: '需要 id' });
                 return;
             }
-            const { updateMcpServer } = await import("../channels/mcp-server-manager.js");
             const updated = updateMcpServer(body.id, {
                 ...(body.name !== undefined ? { name: body.name } : {}),
                 ...(body.type !== undefined ? { type: body.type } : {}),
@@ -373,6 +421,10 @@ export class LoginApi {
             respondJson(res, 200, { ok: updated });
         }
         catch (error) {
+            if (error instanceof McpManagerError) {
+                respondJson(res, 400, { ok: false, error: error.message, code: error.code });
+                return;
+            }
             respondJson(res, 500, { ok: false, error: messageOf(error) });
         }
     }
