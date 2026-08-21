@@ -47,6 +47,10 @@ export const zh = {
   'rail.usersNone': '暂无绑定用户',
   'rail.loadError': '状态获取失败',
   'rail.retry': '重试',
+  'rail.owner': 'Owner',
+  'rail.guest': '访客',
+  'rail.bindingsNone': '该平台暂无绑定用户',
+  'rail.boundAt': '绑定于',
 } as const
 
 /** en copy for the Bot Channel tab. */
@@ -98,6 +102,10 @@ export const en = {
   'rail.usersNone': 'No bound users',
   'rail.loadError': 'Failed to load status',
   'rail.retry': 'Retry',
+  'rail.owner': 'Owner',
+  'rail.guest': 'Guest',
+  'rail.bindingsNone': 'No bound users on this platform',
+  'rail.boundAt': 'Bound',
 } as const
 
 export type ImKey = keyof typeof zh

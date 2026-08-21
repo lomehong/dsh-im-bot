@@ -2680,6 +2680,7 @@ var POLL_MS = 3e4;
 var DOT_ONLINE = "#2A9D8F";
 var DOT_OFFLINE = "#B7791F";
 var DOT_UNBOUND = "#B9B9B9";
+var ORDER = ["wechat", "feishu", "wecom"];
 function PlatformMark({ kind, size }) {
   if (kind === "wechat") return /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(WechatMark, { size });
   if (kind === "feishu") return /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(FeishuMark, { size });
@@ -2689,6 +2690,19 @@ function dotColor(bot) {
   if (bot === void 0) return DOT_UNBOUND;
   if (!bot.configured) return DOT_UNBOUND;
   return bot.online ? DOT_ONLINE : DOT_OFFLINE;
+}
+function relativeTime(iso, now = Date.now()) {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return iso;
+  const elapsed = Math.max(0, now - at);
+  const minutes = Math.floor(elapsed / 6e4);
+  if (minutes < 1) return "\u521A\u521A";
+  if (minutes < 60) return `${minutes} \u5206\u949F\u524D`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} \u5C0F\u65F6\u524D`;
+  const days = Math.floor(hours / 24);
+  if (days <= 30) return `${days} \u5929\u524D`;
+  return new Date(at).toLocaleDateString();
 }
 function detailsWidthOf(frame) {
   const tracks = frame.style.gridTemplateColumns;
@@ -2701,6 +2715,7 @@ function ImBotsRail({ t }) {
   const [bots, setBots] = (0, import_react5.useState)(void 0);
   const [loadError, setLoadError] = (0, import_react5.useState)(false);
   const [expanded, setExpanded] = (0, import_react5.useState)(false);
+  const [activeTab, setActiveTab] = (0, import_react5.useState)(void 0);
   const [detailsWidth, setDetailsWidth] = (0, import_react5.useState)(0);
   const rootRef = (0, import_react5.useRef)(null);
   const refresh = (0, import_react5.useCallback)(async () => {
@@ -2759,8 +2774,9 @@ function ImBotsRail({ t }) {
       if (raf !== 0) cancelAnimationFrame(raf);
     };
   }, []);
-  const order = ["wechat", "feishu", "wecom"];
-  const byKind = new Map(bots?.map((b) => [b.kind, b]) ?? []);
+  const byKind = (0, import_react5.useMemo)(() => new Map(bots?.map((b) => [b.kind, b]) ?? []), [bots]);
+  const active = activeTab ?? ORDER[0];
+  const activeBot = byKind.get(active);
   return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(
     "div",
     {
@@ -2782,7 +2798,7 @@ function ImBotsRail({ t }) {
           {
             role: "status",
             style: {
-              width: 268,
+              width: 292,
               borderRadius: 12,
               padding: "12px 14px",
               background: "var(--dsw-alias-bg-base, #fff)",
@@ -2790,11 +2806,11 @@ function ImBotsRail({ t }) {
               boxShadow: "0 6px 24px rgba(0, 0, 0, 0.14)",
               display: "flex",
               flexDirection: "column",
-              gap: 4,
+              gap: 6,
               color: "inherit"
             },
             children: [
-              /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" }, children: [
                 /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { style: { fontSize: 13, fontWeight: 600 }, children: t("rail.title") }),
                 /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(
                   "button",
@@ -2813,20 +2829,77 @@ function ImBotsRail({ t }) {
                   void refresh();
                 }, style: { border: "none", background: "none", cursor: "pointer", color: "inherit", fontSize: 12, textDecoration: "underline", padding: 0 }, children: t("rail.retry") })
               ] }),
-              order.map((kind) => {
+              /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("div", { role: "tablist", "aria-label": t("rail.title"), style: { display: "flex", gap: 4, borderBottom: "1px solid color-mix(in srgb, currentColor 14%, transparent)", paddingBottom: 6 }, children: ORDER.map((kind) => {
                 const bot = byKind.get(kind);
-                const statusText = bot === void 0 || !bot.configured ? t("rail.unbound") : bot.online ? t("rail.online") : t("rail.offline");
-                return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "7px 2px", opacity: bot !== void 0 && bot.configured ? 1 : 0.55 }, children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(PlatformMark, { kind, size: 24 }),
-                  /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { flex: 1, minWidth: 0 }, children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("div", { style: { fontSize: 13, fontWeight: 500 }, children: bot?.label ?? kind }),
-                    /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("div", { style: { fontSize: 11, opacity: 0.65, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: bot?.account ?? "\u2014" }),
-                    /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("div", { style: { fontSize: 11, opacity: 0.75 }, children: bot !== void 0 && bot.configured ? bot.boundUsers > 0 ? `${bot.boundUsers}${t("rail.usersSuffix")}` : t("rail.usersNone") : t("rail.unbound") })
+                const selected = kind === active;
+                return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(
+                  "button",
+                  {
+                    type: "button",
+                    role: "tab",
+                    "aria-selected": selected,
+                    onClick: () => {
+                      setActiveTab(kind);
+                    },
+                    style: {
+                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 5,
+                      padding: "6px 2px",
+                      fontSize: 12,
+                      cursor: "pointer",
+                      border: "none",
+                      borderRadius: 8,
+                      color: "inherit",
+                      background: selected ? "color-mix(in srgb, currentColor 8%, transparent)" : "transparent",
+                      fontWeight: selected ? 600 : 400,
+                      borderBottom: selected ? `2px solid ${DOT_ONLINE}` : "2px solid transparent"
+                    },
+                    children: [
+                      /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(PlatformMark, { kind, size: 16 }),
+                      /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { children: bot?.label ?? kind }),
+                      /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { "aria-hidden": true, style: { width: 7, height: 7, borderRadius: "50%", background: dotColor(bot), flex: "none" } })
+                    ]
+                  },
+                  kind
+                );
+              }) }),
+              /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "4px 2px 2px", opacity: activeBot !== void 0 && activeBot.configured ? 1 : 0.55 }, children: [
+                /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(PlatformMark, { kind: active, size: 26 }),
+                /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { flex: 1, minWidth: 0 }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { fontSize: 12.5, fontWeight: 500 }, children: [
+                    activeBot?.label,
+                    /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { style: { fontWeight: 400, opacity: 0.65, marginLeft: 6, fontSize: 11 }, children: activeBot === void 0 || !activeBot.configured ? t("rail.unbound") : activeBot.online ? t("rail.online") : t("rail.offline") })
                   ] }),
-                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { title: statusText, style: { width: 9, height: 9, borderRadius: "50%", flex: "none", background: dotColor(bot) } }),
-                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { style: { fontSize: 11, opacity: 0.75, flex: "none" }, children: statusText })
-                ] }, kind);
-              })
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("div", { style: { fontSize: 11, opacity: 0.65, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: activeBot?.account ?? "\u2014" })
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { "aria-hidden": true, style: { width: 10, height: 10, borderRadius: "50%", flex: "none", background: dotColor(activeBot) } })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { display: "flex", flexDirection: "column", maxHeight: 208, overflowY: "auto", borderTop: "1px solid color-mix(in srgb, currentColor 10%, transparent)" }, children: [
+                (activeBot?.bindings.length ?? 0) === 0 && /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("div", { style: { fontSize: 11.5, opacity: 0.55, padding: "8px 2px" }, children: t("rail.bindingsNone") }),
+                activeBot?.bindings.map((binding) => /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 8, padding: "5px 2px", fontSize: 11.5 }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(
+                    "span",
+                    {
+                      title: binding.isMaster ? t("rail.owner") : t("rail.guest"),
+                      style: {
+                        flex: "none",
+                        fontSize: 10,
+                        padding: "1px 6px",
+                        borderRadius: 8,
+                        background: binding.isMaster ? "color-mix(in srgb, #B7791F 18%, transparent)" : "color-mix(in srgb, currentColor 8%, transparent)",
+                        color: binding.isMaster ? "#B7791F" : "inherit",
+                        opacity: binding.isMaster ? 1 : 0.7
+                      },
+                      children: binding.isMaster ? `\u{1F451} ${t("rail.owner")}` : t("rail.guest")
+                    }
+                  ),
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }, title: binding.sessionId, children: binding.userId }),
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { style: { flex: "none", opacity: 0.6 }, children: relativeTime(binding.boundAt) })
+                ] }, `${binding.sessionId}-${binding.userId}`))
+              ] })
             ]
           }
         ),
@@ -2855,7 +2928,7 @@ function ImBotsRail({ t }) {
               color: "inherit"
             },
             children: [
-              order.map((kind) => {
+              ORDER.map((kind) => {
                 const bot = byKind.get(kind);
                 return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("span", { style: { position: "relative", display: "inline-flex" }, children: [
                   /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(PlatformMark, { kind, size: 18 }),
@@ -2925,7 +2998,11 @@ var zh = {
   "rail.usersSuffix": " \u4E2A\u7ED1\u5B9A\u7528\u6237",
   "rail.usersNone": "\u6682\u65E0\u7ED1\u5B9A\u7528\u6237",
   "rail.loadError": "\u72B6\u6001\u83B7\u53D6\u5931\u8D25",
-  "rail.retry": "\u91CD\u8BD5"
+  "rail.retry": "\u91CD\u8BD5",
+  "rail.owner": "Owner",
+  "rail.guest": "\u8BBF\u5BA2",
+  "rail.bindingsNone": "\u8BE5\u5E73\u53F0\u6682\u65E0\u7ED1\u5B9A\u7528\u6237",
+  "rail.boundAt": "\u7ED1\u5B9A\u4E8E"
 };
 var en = {
   nav: "Mobile Connect",
@@ -2974,7 +3051,11 @@ var en = {
   "rail.usersSuffix": " bound users",
   "rail.usersNone": "No bound users",
   "rail.loadError": "Failed to load status",
-  "rail.retry": "Retry"
+  "rail.retry": "Retry",
+  "rail.owner": "Owner",
+  "rail.guest": "Guest",
+  "rail.bindingsNone": "No bound users on this platform",
+  "rail.boundAt": "Bound"
 };
 
 // src/client/store.ts

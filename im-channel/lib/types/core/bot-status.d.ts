@@ -25,13 +25,33 @@ export interface ImBotStatus {
     account: string | undefined;
     /** 该平台已绑定的 IM 用户数 */
     boundUsers: number;
+    /** 该平台的绑定明细（Owner 在前，其余按绑定时间） */
+    bindings: ImBotBinding[];
 }
+/** 一条绑定明细（用户标识已脱敏）。 */
+export interface ImBotBinding {
+    /** 脱敏后的用户标识（前 8 位 + …） */
+    userId: string;
+    /** 是否 Owner（/bind 认领者） */
+    isMaster: boolean;
+    /** 绑定时间（ISO） */
+    boundAt: string;
+    /** 绑定的 harness 会话 id */
+    sessionId: string;
+}
+/** 用户标识脱敏：前 8 位 + 省略号（与设置页 Owner 展示同口径）。 */
+export declare function maskUserId(userId: string): string;
 /** 依赖注入面（测试可替换；生产默认走凭证加载器与 BindStore 单例）。 */
 export interface BotStatusDeps {
     /** 读取各平台凭证，返回账号标识；不存在返回 undefined。 */
     accountOf: (kind: ImBotStatus['kind']) => string | undefined;
-    /** 统计某平台已绑定用户数。 */
-    boundUsersOf: (kind: ImBotStatus['kind']) => number;
+    /** 该平台的绑定明细行（原始 Binding）。 */
+    bindingsOf: (kind: ImBotStatus['kind']) => Array<{
+        userId: string;
+        isMaster?: boolean;
+        boundAt: string;
+        sessionId: string;
+    }>;
 }
 /** 生产依赖：凭证文件 + BindStore 单例。 */
 export declare function defaultBotStatusDeps(): BotStatusDeps;
