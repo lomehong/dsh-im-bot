@@ -62,8 +62,10 @@ im-channel 插件（外部包，经 install.mjs 或 pnpm add git 安装）
 | wechat | iLink 长轮询 getupdates | 设置页扫码（移植 openclaw-weixin，MIT） | 批量增量消息（协议无编辑能力） |
 | wecom | 智能机器人回调 + 主动推送 | 设置页填 BotID + Secret | replyStream 流式（不可用时一次性回复） |
 
-远期规划：QQ、钉钉。另含通用 MCP 服务器管理（streamable-http，凭证
-`~/.dsh/im-channel/credentials/mcp-servers.json`），注册进分身会话。
+远期规划：QQ、钉钉。另含通用 MCP 服务器管理（streamable-http / stdio 双传输，凭证
+`~/.dsh/im-channel/credentials/mcp-servers.json`），协议层基于官方
+`@modelcontextprotocol/sdk`（initialize 握手、cursor 分页、会话与超时、headers 透传），
+工具以 `mcp__<服务器名>__<工具名>` 注册进分身会话。
 
 ## Harness 集成（机制已验证）
 
@@ -130,5 +132,5 @@ im-channel:
 
 浏览器侧 HTTP（webServer exact 路由，LoginApi 注册）：
 `/im-channel/login/start|status`（扫码）、`/im-channel/bindings(|/remove)`、
-`/im-channel/guest-permissions(|/update)`、`/im-channel/mcp-servers(|/add|/update|/remove)`、
+`/im-channel/guest-permissions(|/update)`、`/im-channel/mcp-servers(|/add|/update|/remove|/parse|/test)`、
 `/im-channel/wecom/configure`。

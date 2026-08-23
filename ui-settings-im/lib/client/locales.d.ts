@@ -37,6 +37,20 @@ export declare const zh: {
     readonly 'step.wecom.3': "在「API 接收事件」中选择「长连接」模式，复制 BotID 和 Secret。";
     readonly 'step.wecom.4': "在下方输入框中粘贴 BotID 和 Secret，点击保存即可连接。";
     readonly 'note.wecom': "BotID 和 Secret 仅保存在本地，不会上传到任何第三方服务器。";
+    readonly 'rail.title': "机器人状态";
+    readonly 'rail.expand': "展开机器人状态";
+    readonly 'rail.collapse': "收起机器人状态";
+    readonly 'rail.online': "在线";
+    readonly 'rail.offline': "离线";
+    readonly 'rail.unbound': "未绑定";
+    readonly 'rail.usersSuffix': " 个绑定用户";
+    readonly 'rail.usersNone': "暂无绑定用户";
+    readonly 'rail.loadError': "状态获取失败";
+    readonly 'rail.retry': "重试";
+    readonly 'rail.owner': "Owner";
+    readonly 'rail.guest': "访客";
+    readonly 'rail.bindingsNone': "该平台暂无绑定用户";
+    readonly 'rail.boundAt': "绑定于";
 };
 /** en copy for the Bot Channel tab. */
 export declare const en: {
@@ -77,5 +91,19 @@ export declare const en: {
     readonly 'step.wecom.3': "Under \"API Event Receiving\", choose \"Long Connection\" mode, then copy BotID and Secret.";
     readonly 'step.wecom.4': "Paste BotID and Secret in the form below and click Save to connect.";
     readonly 'note.wecom': "BotID and Secret are stored locally and never sent to any third-party server.";
+    readonly 'rail.title': "Bot status";
+    readonly 'rail.expand': "Show bot status";
+    readonly 'rail.collapse': "Hide bot status";
+    readonly 'rail.online': "Online";
+    readonly 'rail.offline': "Offline";
+    readonly 'rail.unbound': "Not set up";
+    readonly 'rail.usersSuffix': " bound users";
+    readonly 'rail.usersNone': "No bound users";
+    readonly 'rail.loadError': "Failed to load status";
+    readonly 'rail.retry': "Retry";
+    readonly 'rail.owner': "Owner";
+    readonly 'rail.guest': "Guest";
+    readonly 'rail.bindingsNone': "No bound users on this platform";
+    readonly 'rail.boundAt': "Bound";
 };
 export type ImKey = keyof typeof zh;

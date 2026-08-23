@@ -1,13 +1,16 @@
 /**
- * 企业微信 MCP 工具注册
+ * MCP 工具注册
  *
- * 将企业微信智能机器人提供的 MCP 工具注册到 DSH agent 的 tool 系统中，
- * 使 agent 可以直接调用企业微信的日程、待办、会议等能力。
+ * 将通用 MCP 服务器提供的工具注册到 DSH agent 的 tool 系统中，
+ * 使 agent 可以直接调用。模型可见的工具名统一采用官方约定
+ * `mcp__<serverName>__<rawName>`（与 DSH 官方 dsh-mcp-client 一致），
+ * 便于按前缀做访客权限白名单（如 `mcp__wecom*` 放行整个命名空间）。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { JsonValue } from '@deepseek-ai/dsh-session'
-import { getEnabledMcpServers } from '../mcp-server-manager.ts'
-import { McpClient, McpManager, type McpServerConfig } from './mcp-client.ts'
+import { getEnabledMcpServers, serverEntryToConfig } from '../mcp-server-manager.ts'
+import { McpManager, type McpServerConfig } from './mcp-client.ts'
+import { publicMcpToolName } from './mcp-tool-name.ts'
 
 /** 管理 MCP 工具注册 */
 export class WecomMcpRegistry {
@@ -24,7 +27,7 @@ export class WecomMcpRegistry {
    */
   syncFromServerFile(): void {
     for (const server of getEnabledMcpServers()) {
-      this.mcpManager.register({ name: server.name, url: server.url })
+      this.mcpManager.register(serverEntryToConfig(server))
     }
   }
 
@@ -32,23 +35,28 @@ export class WecomMcpRegistry {
   async registerToAgent(agentCtx: Context): Promise<void> {
     // 每次 agent 建立时同步最新服务器配置，避免设置页改动要重启才生效
     this.syncFromServerFile()
-    const clients = this.mcpManager.getAll()
-    for (const client of clients) {
+    // 同一 agent 内工具名必须唯一：跨服务器重名时跳过并告警
+    const usedNames = new Set<string>()
+    for (const client of this.mcpManager.getAll()) {
       try {
         const tools = await client.listTools()
         if (tools.length === 0) continue
 
         for (const tool of tools) {
-          const toolName = tool.name
+          const toolName = publicMcpToolName(client.name, tool.name)
+          if (usedNames.has(toolName)) {
+            this.log(`跳过重名工具 ${toolName} (${client.name})`)
+            continue
+          }
           const toolDescription = tool.description || `${client.name} 工具`
-          const inputSchema = tool.inputSchema as Record<string, unknown> ?? {}
+          const inputSchema = tool.inputSchema ?? {}
 
           // 创建 ToolDefinition
           const definition = {
             name: toolName,
             description: toolDescription,
             // 直接使用 MCP 的 inputSchema 作为参数 schema
-            parameters: inputSchema as Record<string, unknown>,
+            parameters: inputSchema,
             output: {
               schema: { type: 'object' as const },
               render: (_args: unknown, value: JsonValue): Array<{ type: string; text: string }> => {
@@ -59,18 +67,24 @@ export class WecomMcpRegistry {
               },
             },
             execute: async (args: unknown, _exec: unknown): Promise<JsonValue> => {
-              const result = await client.callTool(toolName, (args ?? {}) as Record<string, unknown>)
-              return { result }
+              const result = await client.callTool(tool.name, (args ?? {}) as Record<string, unknown>)
+              if (result.isError) {
+                return { ok: false, error: result.text || 'MCP 工具返回错误' }
+              }
+              return {
+                ok: true,
+                result: result.text,
+                ...(result.structuredContent !== undefined ? { structured: result.structuredContent as JsonValue } : {}),
+              }
             },
             isConcurrencySafe: (): boolean => true,
           }
 
           try {
             // @ts-expect-error - DSH tool register API
-            const dispose = agentCtx.tools?.register?.(definition)
-            if (typeof dispose === 'function') {
-              this.log(`注册 MCP 工具: ${toolName} (${client.name})`)
-            }
+            agentCtx.tools?.register?.(definition)
+            usedNames.add(toolName)
+            this.log(`注册 MCP 工具: ${toolName} (${client.name})`)
           } catch (registerError) {
             this.log(`注册 MCP 工具失败 ${toolName}: ${registerError instanceof Error ? registerError.message : String(registerError)}`)
           }

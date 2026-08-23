@@ -145,6 +145,18 @@ cd ~/.dsh/profiles/web && pnpm add \
 其工具会注册到分身会话中，模型可直接调用。访客能否使用 MCP 工具由访客权限白名单控制
 （可用前缀通配如 `mcp__wecom*` 放行整个命名空间）。
 
+协议实现基于官方 `@modelcontextprotocol/sdk`，支持两种标准传输（Streamable HTTP / stdio）：
+
+- **标准握手**：`initialize` / `initialized` 协商协议版本，维护 `Mcp-Session-Id` 会话；
+- **工具命名**：注册为 `mcp__<服务器名>__<工具名>`（与 DSH 官方 dsh-mcp-client 一致），
+  超长/含非法字符的原始名自动截断并加稳定哈希后缀；
+- **分页与时限**：`tools/list` 按 cursor 分页拉全；工具调用默认 60 秒超时，失败自动重连；
+- **错误语义**：工具返回的 `isError` 与 `structuredContent` 原样透传给模型；
+- **stdio 传输**：`command` 条目派生本地服务器进程，经标准输入/输出交换 JSON-RPC，
+  支持 `args` 与 `env`（叠加在默认环境之上）；
+- **自定义请求头**：HTTP 条目支持 `headers`（如鉴权 token），随每次请求发送；导入的
+  `mcpServers` JSON 可携带，也可在设置页行内编辑（每行一个 `Key: Value`）。
+
 添加服务器以「粘贴」为中心，无需逐项手填：
 
 - **粘贴即添加**：在输入框粘贴服务器地址（每行一个），或直接粘贴 Claude Code / Cursor 等
@@ -152,17 +164,19 @@ cd ~/.dsh/profiles/web && pnpm add \
 - **名称可省略**：自动取自 JSON 键名或 URL 主机名，解析后仍可修改；
 - **保存前自动测试连接**：每个候选自动探测可达性并显示可用工具数，连不通的会标出原因
   （超时 / 网络不可达等），勾选后一键批量添加，重复地址自动跳过；
-- **已有服务器**：支持一键「测试」查看健康状态与工具数、行内编辑名称/URL、二次确认删除。
+- **已有服务器**：支持一键「测试」查看健康状态与工具数、行内编辑名称/URL/请求头、
+  二次确认删除。
 
 ```json
 {
   "mcpServers": {
-    "待办": { "type": "streamable-http", "url": "https://mcp.example.com/mcp" }
+    "待办": { "type": "streamable-http", "url": "https://mcp.example.com/mcp" },
+    "本地记忆": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"] }
   }
 }
 ```
 
-> 仅支持 HTTP 流式（url）服务器；粘贴 stdio（command）配置会提示暂不支持。
+> stdio 条目要求对应命令在 dsh 进程环境中可执行（在 PATH 中）；连接测试会实际派生进程验证。
 
 ### 控制台机器人状态栏
 

@@ -380,15 +380,26 @@ export class LoginApi {
   private async handleMcpServerAdd(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { addMcpServer, McpManagerError } = await import('../channels/mcp-server-manager.ts')
     try {
-      const body = await readJsonBody(req) as { name?: string; type?: string; url?: string }
-      if (typeof body.url !== 'string' || body.url.trim() === '') {
-        respondJson(res, 400, { ok: false, error: '需要 url（name 可省略，自动从地址生成）' })
+      const body = await readJsonBody(req) as { name?: string; type?: string; url?: string; command?: string; args?: string[]; env?: Record<string, string>; headers?: Record<string, string> }
+      const hasUrl = typeof body.url === 'string' && body.url.trim() !== ''
+      const hasCommand = typeof body.command === 'string' && body.command.trim() !== ''
+      if (!hasUrl && !hasCommand) {
+        respondJson(res, 400, { ok: false, error: '需要 url（HTTP）或 command（stdio）；name 可省略自动生成' })
         return
       }
       const entry = addMcpServer({
         ...(typeof body.name === 'string' && body.name.trim() !== '' ? { name: body.name.trim() } : {}),
-        type: body.type ?? 'streamable-http',
-        url: body.url,
+        ...(hasCommand
+          ? {
+              command: body.command as string,
+              ...(Array.isArray(body.args) ? { args: body.args } : {}),
+              ...(body.env !== undefined ? { env: body.env } : {}),
+            }
+          : {
+              type: body.type ?? 'streamable-http',
+              url: body.url as string,
+              ...(body.headers !== undefined ? { headers: body.headers } : {}),
+            }),
         enabled: true,
       })
       respondJson(res, 200, { ok: true, server: entry })
@@ -401,16 +412,24 @@ export class LoginApi {
     }
   }
 
-  /** POST /im-channel/mcp-servers/test {url}：连接测试，返回可达性与工具列表。 */
+  /** POST /im-channel/mcp-servers/test {url | command}：连接测试，返回可达性与工具列表。 */
   private async handleMcpServerTest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
-      const body = await readJsonBody(req) as { url?: string }
-      if (typeof body.url !== 'string' || body.url.trim() === '') {
-        respondJson(res, 400, { ok: false, error: '需要 url' })
+      const body = await readJsonBody(req) as { url?: string; command?: string; args?: string[]; env?: Record<string, string>; headers?: Record<string, string> }
+      const hasUrl = typeof body.url === 'string' && body.url.trim() !== ''
+      const hasCommand = typeof body.command === 'string' && body.command.trim() !== ''
+      if (!hasUrl && !hasCommand) {
+        respondJson(res, 400, { ok: false, error: '需要 url 或 command' })
         return
       }
       const { testMcpServer } = await import('../channels/mcp-server-manager.ts')
-      const result = await testMcpServer(body.url)
+      const result = await testMcpServer({
+        ...(hasUrl ? { url: body.url as string } : {}),
+        ...(hasCommand ? { command: body.command as string } : {}),
+        ...(Array.isArray(body.args) ? { args: body.args } : {}),
+        ...(body.env !== undefined ? { env: body.env } : {}),
+        ...(body.headers !== undefined ? { headers: body.headers } : {}),
+      })
       respondJson(res, 200, { ok: true, result })
     } catch (error) {
       respondJson(res, 500, { ok: false, error: messageOf(error) })
@@ -436,7 +455,7 @@ export class LoginApi {
   private async handleMcpServerUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { updateMcpServer, McpManagerError } = await import('../channels/mcp-server-manager.ts')
     try {
-      const body = await readJsonBody(req) as { id?: string; name?: string; type?: string; url?: string; enabled?: boolean }
+      const body = await readJsonBody(req) as { id?: string; name?: string; type?: string; url?: string; enabled?: boolean; command?: string; args?: string[]; env?: Record<string, string>; headers?: Record<string, string> }
       if (typeof body.id !== 'string') {
         respondJson(res, 400, { ok: false, error: '需要 id' })
         return
@@ -446,6 +465,10 @@ export class LoginApi {
         ...(body.type !== undefined ? { type: body.type } : {}),
         ...(body.url !== undefined ? { url: body.url } : {}),
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+        ...(body.command !== undefined ? { command: body.command } : {}),
+        ...(body.args !== undefined ? { args: body.args } : {}),
+        ...(body.env !== undefined ? { env: body.env } : {}),
+        ...(body.headers !== undefined ? { headers: body.headers } : {}),
       })
       respondJson(res, 200, { ok: updated })
     } catch (error) {

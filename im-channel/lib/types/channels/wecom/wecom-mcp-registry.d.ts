@@ -1,8 +1,10 @@
 /**
- * 企业微信 MCP 工具注册
+ * MCP 工具注册
  *
- * 将企业微信智能机器人提供的 MCP 工具注册到 DSH agent 的 tool 系统中，
- * 使 agent 可以直接调用企业微信的日程、待办、会议等能力。
+ * 将通用 MCP 服务器提供的工具注册到 DSH agent 的 tool 系统中，
+ * 使 agent 可以直接调用。模型可见的工具名统一采用官方约定
+ * `mcp__<serverName>__<rawName>`（与 DSH 官方 dsh-mcp-client 一致），
+ * 便于按前缀做访客权限白名单（如 `mcp__wecom*` 放行整个命名空间）。
  */
 import type { Context } from '@deepseek-ai/cordis';
 import { type McpServerConfig } from './mcp-client.ts';

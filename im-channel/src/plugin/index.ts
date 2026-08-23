@@ -10,7 +10,7 @@ import { WechatChannel, loadWechatCredentials } from '../channels/wechat/index.t
 import { FeishuChannel, loadFeishuCredentials } from '../channels/feishu/index.ts'
 import { WecomChannel, loadWecomCredentials } from '../channels/wecom/index.ts'
 import { WecomMcpRegistry } from '../channels/wecom/wecom-mcp-registry.ts'
-import { getEnabledMcpServers } from '../channels/mcp-server-manager.ts'
+import { getEnabledMcpServers, serverEntryToConfig } from '../channels/mcp-server-manager.ts'
 import { LoginApi } from './login-api.ts'
 import { createSectionView } from './section-view.ts'
 import { ApprovalBridge } from './approval-bridge.ts'
@@ -120,7 +120,7 @@ export function apply(ctx: Context, config: ImChannelSection): void {
   // 从通用 MCP 服务器管理中读取所有已启用的 MCP 服务器
   const enabledServers = getEnabledMcpServers()
   for (const server of enabledServers) {
-    mcpRegistry.registerServer({ name: server.name, url: server.url })
+    mcpRegistry.registerServer(serverEntryToConfig(server))
   }
   // 访客工具审批桥：卡片推给渠道 Owner，等待其 IM 回复（允许/拒绝），
   // 超时 fail-closed。通知走当前 router 的 pushToUser（闭包延迟绑定）。

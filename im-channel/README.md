@@ -13,8 +13,9 @@ DeepSeek Harness（dsh）的 IM 服务端通道插件：**飞书 / 微信 / 企�
 | 微信 | 设置页扫码（iLink 协议） | `~/.dsh/im-channel/credentials/wechat.json` |
 | 企业微信 | 设置页填 BotID + Secret（智能机器人） | `~/.dsh/im-channel/credentials/wecom.json` |
 
-MCP 服务器（streamable-http）配置在 `~/.dsh/im-channel/credentials/mcp-servers.json`，
-设置页可视化管理。
+MCP 服务器（streamable-http / stdio 双传输）配置在 `~/.dsh/im-channel/credentials/mcp-servers.json`，
+设置页可视化管理（含粘贴导入、连接测试、行内编辑请求头）。协议层基于官方 `@modelcontextprotocol/sdk`，工具以
+`mcp__<服务器名>__<工具名>` 注册。
 
 ## 数字分身模型
 

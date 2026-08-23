@@ -1968,6 +1968,34 @@ var badgeStyle = {
   fontSize: "11px",
   whiteSpace: "nowrap"
 };
+var typeBadgeStyle = {
+  ...badgeStyle,
+  backgroundColor: "#F0F0F0",
+  color: "#777",
+  flex: "none"
+};
+function formatTarget(entry) {
+  if (entry.url !== "") return entry.url;
+  const args = entry.args ?? [];
+  return args.length > 0 ? `${entry.command ?? ""} ${args.join(" ")}` : entry.command ?? "";
+}
+function parseHeadersText(text) {
+  const out = {};
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    const idx = trimmed.indexOf(":");
+    if (idx <= 0) continue;
+    const key = trimmed.slice(0, idx).trim();
+    const value = trimmed.slice(idx + 1).trim();
+    if (key !== "") out[key] = value;
+  }
+  return Object.keys(out).length > 0 ? out : void 0;
+}
+function headersToText(headers) {
+  if (headers === void 0) return "";
+  return Object.entries(headers).map(([key, value]) => `${key}: ${value}`).join("\n");
+}
 function TestBadge({ test }) {
   if (test.state === "idle") return /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", {});
   if (test.state === "testing") {
@@ -1998,6 +2026,7 @@ function McpServersPanel() {
   const [editingId, setEditingId] = (0, import_react2.useState)(void 0);
   const [editName, setEditName] = (0, import_react2.useState)("");
   const [editUrl, setEditUrl] = (0, import_react2.useState)("");
+  const [editHeaders, setEditHeaders] = (0, import_react2.useState)("");
   const [confirmDeleteId, setConfirmDeleteId] = (0, import_react2.useState)(void 0);
   const loadServers = (0, import_react2.useCallback)(() => {
     fetch("/im-channel/mcp-servers").then((r) => r.json()).then((data) => {
@@ -2006,12 +2035,12 @@ function McpServersPanel() {
     });
   }, []);
   (0, import_react2.useEffect)(loadServers, [loadServers]);
-  const runTest = async (url) => {
+  const runTest = async (target) => {
     try {
       const resp = await fetch("/im-channel/mcp-servers/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url })
+        body: JSON.stringify(target)
       });
       const data = await resp.json();
       if (data.ok && data.result?.ok === true) {
@@ -2021,6 +2050,19 @@ function McpServersPanel() {
     } catch (err) {
       return { state: "fail", error: err instanceof Error ? err.message : String(err) };
     }
+  };
+  const testTargetOf = (c) => {
+    if (c.command !== void 0) {
+      return {
+        command: c.command,
+        ...c.args !== void 0 ? { args: c.args } : {},
+        ...c.env !== void 0 ? { env: c.env } : {}
+      };
+    }
+    return {
+      url: c.url,
+      ...c.headers !== void 0 ? { headers: c.headers } : {}
+    };
   };
   const parseInput = async (silent, textOverride) => {
     const text = (textOverride ?? importText).trim();
@@ -2045,16 +2087,25 @@ function McpServersPanel() {
       const unsup = data.unsupported ?? [];
       if (silent && parsed.length === 0 && bad.length === 0 && unsup.length === 0) return;
       if (parsed.length === 0 && bad.length === 0 && unsup.length === 0) {
-        setStatus({ kind: "error", text: "\u6CA1\u6709\u8BC6\u522B\u51FA MCP \u670D\u52A1\u5668\uFF1A\u652F\u6301 http(s) \u5730\u5740\uFF08\u6BCF\u884C\u4E00\u4E2A\uFF09\u6216 mcpServers JSON \u914D\u7F6E" });
+        setStatus({ kind: "error", text: "\u6CA1\u6709\u8BC6\u522B\u51FA MCP \u670D\u52A1\u5668\uFF1A\u652F\u6301 http(s) \u5730\u5740\uFF08\u6BCF\u884C\u4E00\u4E2A\uFF09\u6216 mcpServers JSON \u914D\u7F6E\uFF08\u542B stdio\uFF09" });
         return;
       }
-      const initial = parsed.map((c) => ({ name: c.name, url: c.url, selected: true, test: { state: "idle" } }));
+      const initial = parsed.map((c) => ({
+        name: c.name,
+        url: c.url,
+        ...c.command !== void 0 ? { command: c.command } : {},
+        ...c.args !== void 0 ? { args: c.args } : {},
+        ...c.env !== void 0 ? { env: c.env } : {},
+        ...c.headers !== void 0 ? { headers: c.headers } : {},
+        selected: true,
+        test: { state: "idle" }
+      }));
       setCandidates(initial);
       setUnsupported(unsup);
       setInvalidLines(bad);
       initial.forEach((c, index) => {
         setCandidates((prev) => prev.map((item, i) => i === index ? { ...item, test: { state: "testing" } } : item));
-        void runTest(c.url).then((result) => {
+        void runTest(testTargetOf(c)).then((result) => {
           setCandidates((prev) => prev.map((item, i) => i === index ? { ...item, test: result } : item));
         });
       });
@@ -2073,10 +2124,21 @@ function McpServersPanel() {
     const failures = [];
     for (const c of chosen) {
       try {
+        const body = c.command !== void 0 ? {
+          name: c.name.trim() === "" ? void 0 : c.name.trim(),
+          command: c.command,
+          ...c.args !== void 0 ? { args: c.args } : {},
+          ...c.env !== void 0 ? { env: c.env } : {}
+        } : {
+          name: c.name.trim() === "" ? void 0 : c.name.trim(),
+          type: "streamable-http",
+          url: c.url,
+          ...c.headers !== void 0 ? { headers: c.headers } : {}
+        };
         const resp = await fetch("/im-channel/mcp-servers/add", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: c.name.trim() === "" ? void 0 : c.name.trim(), type: "streamable-http", url: c.url })
+          body: JSON.stringify(body)
         });
         const data = await resp.json();
         if (data.ok) added++;
@@ -2132,26 +2194,40 @@ function McpServersPanel() {
   };
   const testRow = async (server) => {
     setRowTests((prev) => ({ ...prev, [server.id]: { state: "testing" } }));
-    const result = await runTest(server.url);
+    const result = await runTest(testTargetOf(server));
     setRowTests((prev) => ({ ...prev, [server.id]: result }));
   };
   const startEdit = (server) => {
     setEditingId(server.id);
     setEditName(server.name);
     setEditUrl(server.url);
+    setEditHeaders(headersToText(server.headers));
     setConfirmDeleteId(void 0);
   };
+  const editingServer = servers.find((s) => s.id === editingId);
+  const editingStdio = editingServer !== void 0 && editingServer.url === "";
   const saveEdit = async () => {
     if (editingId === void 0) return;
-    if (editName.trim() === "" || editUrl.trim() === "") {
-      setStatus({ kind: "error", text: "\u540D\u79F0\u548C URL \u4E0D\u80FD\u4E3A\u7A7A" });
+    if (editName.trim() === "") {
+      setStatus({ kind: "error", text: "\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A" });
+      return;
+    }
+    if (!editingStdio && editUrl.trim() === "") {
+      setStatus({ kind: "error", text: "URL \u4E0D\u80FD\u4E3A\u7A7A" });
       return;
     }
     try {
+      const body = editingStdio ? { id: editingId, name: editName.trim() } : {
+        id: editingId,
+        name: editName.trim(),
+        url: editUrl.trim(),
+        // 空文本 → {}，后端据此清空已有 headers
+        headers: parseHeadersText(editHeaders) ?? {}
+      };
       const resp = await fetch("/im-channel/mcp-servers/update", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: editingId, name: editName.trim(), url: editUrl.trim() })
+        body: JSON.stringify(body)
       });
       const data = await resp.json();
       if (data.ok) {
@@ -2172,7 +2248,7 @@ function McpServersPanel() {
     /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { style: { marginBottom: "8px" }, children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
       "textarea",
       {
-        placeholder: '\u7C98\u8D34 MCP \u670D\u52A1\u5668\u5730\u5740\uFF08\u6BCF\u884C\u4E00\u4E2A\uFF09\uFF0C\u6216\u6807\u51C6 mcpServers JSON \u914D\u7F6E\uFF0C\u4F8B\u5982\uFF1A\nhttps://mcp.example.com/mcp\n{"mcpServers": { "\u5F85\u529E": { "url": "https://\u2026" } }}',
+        placeholder: '\u7C98\u8D34 MCP \u670D\u52A1\u5668\u5730\u5740\uFF08\u6BCF\u884C\u4E00\u4E2A\uFF09\uFF0C\u6216\u6807\u51C6 mcpServers JSON \u914D\u7F6E\uFF08HTTP / stdio \u5747\u53EF\uFF09\uFF0C\u4F8B\u5982\uFF1A\nhttps://mcp.example.com/mcp\n{"mcpServers": { "\u5F85\u529E": { "url": "https://\u2026" }, "\u672C\u5730": { "command": "npx", "args": ["-y", "some-server"] } }}',
         value: importText,
         onChange: (e) => setImportText(e.target.value),
         onPaste: (e) => {
@@ -2189,7 +2265,7 @@ function McpServersPanel() {
         void parseInput(false);
       }, children: parsing ? "\u89E3\u6790\u4E2D\u2026" : "\u89E3\u6790\u5E76\u9884\u89C8" }),
       importText !== "" && candidates.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: ghostBtn, onClick: () => setImportText(""), children: "\u6E05\u7A7A" }),
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { fontSize: "11px", color: "#aaa" }, children: "\u652F\u6301 Claude Code / Cursor \u7684 mcpServers JSON \u683C\u5F0F\u4E0E\u88F8 URL" })
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { fontSize: "11px", color: "#aaa" }, children: "\u652F\u6301 Claude Code / Cursor \u7684 mcpServers JSON\uFF08HTTP \u4E0E stdio\uFF09\u4E0E\u88F8 URL" })
     ] }),
     candidates.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { border: "1px solid #E5E5E5", borderRadius: "6px", padding: "8px 12px", marginBottom: "12px", backgroundColor: "#FAFAFA" }, children: [
       /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { fontSize: "12px", color: "#666", margin: "4px 0 8px" }, children: [
@@ -2216,9 +2292,10 @@ function McpServersPanel() {
             style: { flex: "0 0 150px", padding: "4px 8px", border: "1px solid #ddd", borderRadius: "4px" }
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { flex: 1, color: "#666", fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: c.url, children: c.url }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: typeBadgeStyle, children: c.command !== void 0 ? "stdio" : "HTTP" }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { flex: 1, color: "#666", fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: formatTarget(c), children: formatTarget(c) }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(TestBadge, { test: c.test })
-      ] }, c.url)),
+      ] }, formatTarget(c))),
       unsupported.map((u) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { display: "flex", gap: "8px", padding: "6px 0", fontSize: "12px", color: "#B7791F" }, children: [
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("span", { children: [
           "\u26A0\uFE0F ",
@@ -2249,15 +2326,31 @@ function McpServersPanel() {
       servers.length,
       "\uFF09"
     ] }),
-    servers.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { style: { color: "#999", fontSize: "13px", marginBottom: "12px" }, children: "\u6682\u65E0 MCP \u670D\u52A1\u5668\u2014\u2014\u5728\u4E0A\u65B9\u7C98\u8D34\u4E00\u4E2A MCP \u670D\u52A1\u5668\u5730\u5740\u8BD5\u8BD5" }),
-    servers.map((s) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { style: { display: "flex", alignItems: "center", gap: "8px", padding: "8px", borderBottom: "1px solid #eee", fontSize: "13px", flexWrap: "wrap" }, children: editingId === s.id ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("input", { value: editName, "aria-label": "\u540D\u79F0", onChange: (e) => setEditName(e.target.value), style: { flex: "0 0 140px", padding: "4px 8px", border: "1px solid #ddd", borderRadius: "4px" } }),
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("input", { value: editUrl, "aria-label": "URL", onChange: (e) => setEditUrl(e.target.value), style: { flex: 2, minWidth: "200px", padding: "4px 8px", border: "1px solid #ddd", borderRadius: "4px" } }),
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: smallBtn, onClick: () => {
-        void saveEdit();
-      }, children: "\u4FDD\u5B58" }),
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: ghostBtn, onClick: () => setEditingId(void 0), children: "\u53D6\u6D88" })
-    ] }) : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+    servers.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { style: { color: "#999", fontSize: "13px", marginBottom: "12px" }, children: "\u6682\u65E0 MCP \u670D\u52A1\u5668\u2014\u2014\u5728\u4E0A\u65B9\u7C98\u8D34\u4E00\u4E2A MCP \u670D\u52A1\u5668\u5730\u5740\u6216 mcpServers JSON \u8BD5\u8BD5" }),
+    servers.map((s) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { style: { padding: "8px", borderBottom: "1px solid #eee", fontSize: "13px" }, children: editingId === s.id ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("input", { value: editName, "aria-label": "\u540D\u79F0", onChange: (e) => setEditName(e.target.value), style: { flex: "0 0 140px", padding: "4px 8px", border: "1px solid #ddd", borderRadius: "4px" } }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: typeBadgeStyle, children: editingStdio ? "stdio" : "HTTP" }),
+        editingStdio ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("span", { style: { flex: 1, color: "#666", fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: formatTarget(s), children: [
+          formatTarget(s),
+          "\uFF08\u5982\u9700\u4FEE\u6539\u547D\u4EE4\u8BF7\u5220\u9664\u540E\u91CD\u65B0\u5BFC\u5165\uFF09"
+        ] }) : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("input", { value: editUrl, "aria-label": "URL", onChange: (e) => setEditUrl(e.target.value), style: { flex: 2, minWidth: "200px", padding: "4px 8px", border: "1px solid #ddd", borderRadius: "4px" } }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: smallBtn, onClick: () => {
+          void saveEdit();
+        }, children: "\u4FDD\u5B58" }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: ghostBtn, onClick: () => setEditingId(void 0), children: "\u53D6\u6D88" })
+      ] }),
+      !editingStdio && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+        "textarea",
+        {
+          value: editHeaders,
+          "aria-label": "\u8BF7\u6C42\u5934",
+          onChange: (e) => setEditHeaders(e.target.value),
+          placeholder: "\u9644\u52A0\u8BF7\u6C42\u5934\uFF08\u53EF\u9009\uFF0C\u6BCF\u884C\u4E00\u4E2A Key: Value\uFF09\uFF0C\u4F8B\u5982\uFF1A\nAuthorization: Bearer \u2026",
+          style: { ...formFieldStyle2, marginTop: "8px", marginBottom: 0, fontFamily: "inherit", resize: "vertical", minHeight: "40px", fontSize: "12px" }
+        }
+      )
+    ] }) : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }, children: [
       /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
         "span",
         {
@@ -2270,7 +2363,11 @@ function McpServersPanel() {
         }
       ),
       /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { flex: "0 0 120px", fontWeight: "500" }, children: s.name }),
-      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: { flex: 1, color: "#666", fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: s.url, children: s.url }),
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { style: typeBadgeStyle, children: s.url === "" ? "stdio" : "HTTP" }),
+      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("span", { style: { flex: 1, color: "#666", fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: formatTarget(s), children: [
+        formatTarget(s),
+        s.headers !== void 0 ? "\u3000\u{1F511}" : ""
+      ] }),
       /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(TestBadge, { test: rowTests[s.id] ?? { state: "idle" } }),
       /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { style: ghostBtn, onClick: () => {
         void testRow(s);

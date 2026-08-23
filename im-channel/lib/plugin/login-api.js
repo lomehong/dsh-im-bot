@@ -361,14 +361,25 @@ export class LoginApi {
         const { addMcpServer, McpManagerError } = await import("../channels/mcp-server-manager.js");
         try {
             const body = await readJsonBody(req);
-            if (typeof body.url !== 'string' || body.url.trim() === '') {
-                respondJson(res, 400, { ok: false, error: '需要 url（name 可省略，自动从地址生成）' });
+            const hasUrl = typeof body.url === 'string' && body.url.trim() !== '';
+            const hasCommand = typeof body.command === 'string' && body.command.trim() !== '';
+            if (!hasUrl && !hasCommand) {
+                respondJson(res, 400, { ok: false, error: '需要 url（HTTP）或 command（stdio）；name 可省略自动生成' });
                 return;
             }
             const entry = addMcpServer({
                 ...(typeof body.name === 'string' && body.name.trim() !== '' ? { name: body.name.trim() } : {}),
-                type: body.type ?? 'streamable-http',
-                url: body.url,
+                ...(hasCommand
+                    ? {
+                        command: body.command,
+                        ...(Array.isArray(body.args) ? { args: body.args } : {}),
+                        ...(body.env !== undefined ? { env: body.env } : {}),
+                    }
+                    : {
+                        type: body.type ?? 'streamable-http',
+                        url: body.url,
+                        ...(body.headers !== undefined ? { headers: body.headers } : {}),
+                    }),
                 enabled: true,
             });
             respondJson(res, 200, { ok: true, server: entry });
@@ -381,16 +392,24 @@ export class LoginApi {
             respondJson(res, 500, { ok: false, error: messageOf(error) });
         }
     }
-    /** POST /im-channel/mcp-servers/test {url}：连接测试，返回可达性与工具列表。 */
+    /** POST /im-channel/mcp-servers/test {url | command}：连接测试，返回可达性与工具列表。 */
     async handleMcpServerTest(req, res) {
         try {
             const body = await readJsonBody(req);
-            if (typeof body.url !== 'string' || body.url.trim() === '') {
-                respondJson(res, 400, { ok: false, error: '需要 url' });
+            const hasUrl = typeof body.url === 'string' && body.url.trim() !== '';
+            const hasCommand = typeof body.command === 'string' && body.command.trim() !== '';
+            if (!hasUrl && !hasCommand) {
+                respondJson(res, 400, { ok: false, error: '需要 url 或 command' });
                 return;
             }
             const { testMcpServer } = await import("../channels/mcp-server-manager.js");
-            const result = await testMcpServer(body.url);
+            const result = await testMcpServer({
+                ...(hasUrl ? { url: body.url } : {}),
+                ...(hasCommand ? { command: body.command } : {}),
+                ...(Array.isArray(body.args) ? { args: body.args } : {}),
+                ...(body.env !== undefined ? { env: body.env } : {}),
+                ...(body.headers !== undefined ? { headers: body.headers } : {}),
+            });
             respondJson(res, 200, { ok: true, result });
         }
         catch (error) {
@@ -426,6 +445,10 @@ export class LoginApi {
                 ...(body.type !== undefined ? { type: body.type } : {}),
                 ...(body.url !== undefined ? { url: body.url } : {}),
                 ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+                ...(body.command !== undefined ? { command: body.command } : {}),
+                ...(body.args !== undefined ? { args: body.args } : {}),
+                ...(body.env !== undefined ? { env: body.env } : {}),
+                ...(body.headers !== undefined ? { headers: body.headers } : {}),
             });
             respondJson(res, 200, { ok: updated });
         }

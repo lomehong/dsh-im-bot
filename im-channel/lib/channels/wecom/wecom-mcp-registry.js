@@ -1,5 +1,6 @@
-import { getEnabledMcpServers } from "../mcp-server-manager.js";
+import { getEnabledMcpServers, serverEntryToConfig } from "../mcp-server-manager.js";
 import { McpManager } from "./mcp-client.js";
+import { publicMcpToolName } from "./mcp-tool-name.js";
 /** 管理 MCP 工具注册 */
 export class WecomMcpRegistry {
     mcpManager = new McpManager();
@@ -13,21 +14,26 @@ export class WecomMcpRegistry {
      */
     syncFromServerFile() {
         for (const server of getEnabledMcpServers()) {
-            this.mcpManager.register({ name: server.name, url: server.url });
+            this.mcpManager.register(serverEntryToConfig(server));
         }
     }
     /** 将 MCP 工具注册到 agent 上下文（每个 agent 独立注册） */
     async registerToAgent(agentCtx) {
         // 每次 agent 建立时同步最新服务器配置，避免设置页改动要重启才生效
         this.syncFromServerFile();
-        const clients = this.mcpManager.getAll();
-        for (const client of clients) {
+        // 同一 agent 内工具名必须唯一：跨服务器重名时跳过并告警
+        const usedNames = new Set();
+        for (const client of this.mcpManager.getAll()) {
             try {
                 const tools = await client.listTools();
                 if (tools.length === 0)
                     continue;
                 for (const tool of tools) {
-                    const toolName = tool.name;
+                    const toolName = publicMcpToolName(client.name, tool.name);
+                    if (usedNames.has(toolName)) {
+                        this.log(`跳过重名工具 ${toolName} (${client.name})`);
+                        continue;
+                    }
                     const toolDescription = tool.description || `${client.name} 工具`;
                     const inputSchema = tool.inputSchema ?? {};
                     // 创建 ToolDefinition
@@ -46,17 +52,23 @@ export class WecomMcpRegistry {
                             },
                         },
                         execute: async (args, _exec) => {
-                            const result = await client.callTool(toolName, (args ?? {}));
-                            return { result };
+                            const result = await client.callTool(tool.name, (args ?? {}));
+                            if (result.isError) {
+                                return { ok: false, error: result.text || 'MCP 工具返回错误' };
+                            }
+                            return {
+                                ok: true,
+                                result: result.text,
+                                ...(result.structuredContent !== undefined ? { structured: result.structuredContent } : {}),
+                            };
                         },
                         isConcurrencySafe: () => true,
                     };
                     try {
                         // @ts-expect-error - DSH tool register API
-                        const dispose = agentCtx.tools?.register?.(definition);
-                        if (typeof dispose === 'function') {
-                            this.log(`注册 MCP 工具: ${toolName} (${client.name})`);
-                        }
+                        agentCtx.tools?.register?.(definition);
+                        usedNames.add(toolName);
+                        this.log(`注册 MCP 工具: ${toolName} (${client.name})`);
                     }
                     catch (registerError) {
                         this.log(`注册 MCP 工具失败 ${toolName}: ${registerError instanceof Error ? registerError.message : String(registerError)}`);
