@@ -16,7 +16,12 @@ const MAX_TOOL_NAME = 64
 /** 服务器名作为工具名片段：非法字符换 _，截断到 32 字符 */
 export function sanitizeServerName(name: string): string {
   const cleaned = name.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 32)
-  return cleaned === '' ? 'server' : cleaned
+  if (cleaned === '') return 'server'
+  // 纯非 ASCII 名（如中文「企业微信消息」）清洗后只剩一串下划线：
+  // 多个中文 server 会净化成相同前缀导致工具名冲突/无法区分。
+  // 用稳定哈希（FNV-1a）生成可区分片段，保证不同 server 前缀唯一。
+  if (/^_+$/.test(cleaned)) return `srv_${fnv1aHex(name)}`
+  return cleaned
 }
 
 /** FNV-1a 32-bit：稳定短哈希（8 位十六进制） */

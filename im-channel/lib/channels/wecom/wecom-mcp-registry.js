@@ -4,6 +4,8 @@ import { publicMcpToolName } from "./mcp-tool-name.js";
 /** 管理 MCP 工具注册 */
 export class WecomMcpRegistry {
     mcpManager = new McpManager();
+    /** 全局注册产生的 disposer，供插件卸载/重载时清理 */
+    globalDisposers = [];
     /** 注册 MCP 服务器配置 */
     registerServer(config) {
         this.mcpManager.register(config);
@@ -34,36 +36,7 @@ export class WecomMcpRegistry {
                         this.log(`跳过重名工具 ${toolName} (${client.name})`);
                         continue;
                     }
-                    const toolDescription = tool.description || `${client.name} 工具`;
-                    const inputSchema = tool.inputSchema ?? {};
-                    // 创建 ToolDefinition
-                    const definition = {
-                        name: toolName,
-                        description: toolDescription,
-                        // 直接使用 MCP 的 inputSchema 作为参数 schema
-                        parameters: inputSchema,
-                        output: {
-                            schema: { type: 'object' },
-                            render: (_args, value) => {
-                                const text = typeof value === 'object' && value !== null
-                                    ? JSON.stringify(value, null, 2)
-                                    : String(value ?? '');
-                                return [{ type: 'text', text }];
-                            },
-                        },
-                        execute: async (args, _exec) => {
-                            const result = await client.callTool(tool.name, (args ?? {}));
-                            if (result.isError) {
-                                return { ok: false, error: result.text || 'MCP 工具返回错误' };
-                            }
-                            return {
-                                ok: true,
-                                result: result.text,
-                                ...(result.structuredContent !== undefined ? { structured: result.structuredContent } : {}),
-                            };
-                        },
-                        isConcurrencySafe: () => true,
-                    };
+                    const definition = this.buildDefinition(client, tool);
                     try {
                         // @ts-expect-error - DSH tool register API
                         agentCtx.tools?.register?.(definition);
@@ -79,6 +52,93 @@ export class WecomMcpRegistry {
                 this.log(`获取 MCP 工具列表失败 ${client.name}: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
+    }
+    /**
+     * 将 MCP 工具注册到全局 tools 服务（宿主根层），使**任何通道**创建的
+     * agent 会话（Web / IM / headless / 子代理）都能看到这些工具。
+     *
+     * 工具名沿用官方 `mcp__<serverName>__<rawName>` 命名，server 前缀天然
+     * 避免跨服务器重名；先清理上一代注册再持有新一代（重载安全）。
+     */
+    async registerGlobal(rootCtx) {
+        // 先清理上一代注册（重载/reload 场景），避免旧注册未清理导致撞名
+        this.disposeGlobal();
+        this.syncFromServerFile();
+        const disposers = [];
+        for (const client of this.mcpManager.getAll()) {
+            try {
+                const tools = await client.listTools();
+                if (tools.length === 0)
+                    continue;
+                for (const tool of tools) {
+                    const toolName = publicMcpToolName(client.name, tool.name);
+                    const definition = this.buildDefinition(client, tool);
+                    try {
+                        // @ts-expect-error - DSH tool register API
+                        const dispose = rootCtx.tools?.register?.(definition);
+                        if (typeof dispose === 'function') {
+                            disposers.push(dispose);
+                            this.log(`全局注册 MCP 工具: ${toolName} (${client.name})`);
+                        }
+                    }
+                    catch (registerError) {
+                        this.log(`全局注册 MCP 工具失败 ${toolName}: ${registerError instanceof Error ? registerError.message : String(registerError)}`);
+                    }
+                }
+            }
+            catch (error) {
+                this.log(`获取 MCP 工具列表失败 ${client.name}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+        this.globalDisposers = disposers;
+    }
+    /** 注销全部全局注册的 MCP 工具（插件卸载 / 重载时调用） */
+    disposeGlobal() {
+        for (const dispose of this.globalDisposers) {
+            try {
+                dispose();
+            }
+            catch { /* 清理失败不影响流程 */ }
+        }
+        this.globalDisposers = [];
+    }
+    /** 重载：注销旧注册后按最新配置重新全局注册（reload() 时调用） */
+    async resyncGlobal(rootCtx) {
+        this.disposeGlobal();
+        await this.registerGlobal(rootCtx);
+    }
+    /** 构造单个 MCP 工具的 ToolDefinition（per-agent 与全局注册共用） */
+    buildDefinition(client, tool) {
+        const toolName = publicMcpToolName(client.name, tool.name);
+        const toolDescription = tool.description || `${client.name} 工具`;
+        const inputSchema = tool.inputSchema ?? {};
+        return {
+            name: toolName,
+            description: toolDescription,
+            // 直接使用 MCP 的 inputSchema 作为参数 schema
+            parameters: inputSchema,
+            output: {
+                schema: { type: 'object' },
+                render: (_args, value) => {
+                    const text = typeof value === 'object' && value !== null
+                        ? JSON.stringify(value, null, 2)
+                        : String(value ?? '');
+                    return [{ type: 'text', text }];
+                },
+            },
+            execute: async (args, _exec) => {
+                const result = await client.callTool(tool.name, (args ?? {}));
+                if (result.isError) {
+                    return { ok: false, error: result.text || 'MCP 工具返回错误' };
+                }
+                return {
+                    ok: true,
+                    result: result.text,
+                    ...(result.structuredContent !== undefined ? { structured: result.structuredContent } : {}),
+                };
+            },
+            isConcurrencySafe: () => true,
+        };
     }
     log(message) {
         console.log(`[wecom-mcp] ${message}`);

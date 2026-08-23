@@ -11,6 +11,8 @@ import { type McpServerConfig } from './mcp-client.ts';
 /** 管理 MCP 工具注册 */
 export declare class WecomMcpRegistry {
     private readonly mcpManager;
+    /** 全局注册产生的 disposer，供插件卸载/重载时清理 */
+    private globalDisposers;
     /** 注册 MCP 服务器配置 */
     registerServer(config: McpServerConfig): void;
     /**
@@ -20,5 +22,19 @@ export declare class WecomMcpRegistry {
     syncFromServerFile(): void;
     /** 将 MCP 工具注册到 agent 上下文（每个 agent 独立注册） */
     registerToAgent(agentCtx: Context): Promise<void>;
+    /**
+     * 将 MCP 工具注册到全局 tools 服务（宿主根层），使**任何通道**创建的
+     * agent 会话（Web / IM / headless / 子代理）都能看到这些工具。
+     *
+     * 工具名沿用官方 `mcp__<serverName>__<rawName>` 命名，server 前缀天然
+     * 避免跨服务器重名；先清理上一代注册再持有新一代（重载安全）。
+     */
+    registerGlobal(rootCtx: Context): Promise<void>;
+    /** 注销全部全局注册的 MCP 工具（插件卸载 / 重载时调用） */
+    disposeGlobal(): void;
+    /** 重载：注销旧注册后按最新配置重新全局注册（reload() 时调用） */
+    resyncGlobal(rootCtx: Context): Promise<void>;
+    /** 构造单个 MCP 工具的 ToolDefinition（per-agent 与全局注册共用） */
+    private buildDefinition;
     private log;
 }

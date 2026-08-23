@@ -18,7 +18,7 @@ import { QuestionBridge, type QuestionItem } from './question-bridge.ts'
 import type { ChannelKind, ImChannel } from '../core/channel.ts'
 
 export const name = 'im-channel'
-export const inject = ['agents']
+export const inject = ['agents', 'tools']
 export const provide = ['im-channel']
 
 const NS = settingsNamespace('im-channel')
@@ -111,7 +111,11 @@ export function apply(ctx: Context, config: ImChannelSection): void {
      * 实例行已存在，settings 值不变不会触发 onChange）：冷启动的通道
      * 由这里拉起，不依赖重启。
      */
-    reload: (): void => rebuildRouter(),
+    reload: (): void => {
+      rebuildRouter()
+      // MCP server 增删改后重同步全局工具注册（不依赖重启）
+      void mcpRegistry.resyncGlobal(ctx).catch(() => {})
+    },
   })
   // One driver for the whole plugin lifetime: router rebuilds (settings
   // edits, instance reconciliation) must not orphan bound sessions — the
@@ -122,6 +126,13 @@ export function apply(ctx: Context, config: ImChannelSection): void {
   for (const server of enabledServers) {
     mcpRegistry.registerServer(serverEntryToConfig(server))
   }
+  // 全局注册 MCP 工具：注册到宿主根 tools 层，使任何通道（Web / IM /
+  // headless / 子代理）创建的 agent 会话都能直接调用。生命周期跟随插件
+  // ctx——插件卸载时自动注销。
+  void ctx.effect(async function* () {
+    await mcpRegistry.registerGlobal(ctx)
+    yield () => mcpRegistry.disposeGlobal()
+  }, 'im-channel.mcp-global')
   // 访客工具审批桥：卡片推给渠道 Owner，等待其 IM 回复（允许/拒绝），
   // 超时 fail-closed。通知走当前 router 的 pushToUser（闭包延迟绑定）。
   // 审批卡片走渠道能力（飞书 interactive / 企微 template_card），

@@ -1,7 +1,7 @@
 - insert:
     - id: im-channel
       name: '@dsh-extra/im-channel'
-      inject: [agents]
+      inject: [agents, tools]
       config:
         channels: {}
         commandPrefix: "/"
