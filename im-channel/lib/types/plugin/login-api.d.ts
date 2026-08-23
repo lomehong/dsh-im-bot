@@ -57,8 +57,10 @@ export declare class LoginApi {
     private ensureChannelInstance;
     /**
      * 凭证保存成功后让通道尽快上线。两条路：
-     * - wecom 通道在线（activeInstance 存在）→ reconnect() 热替换凭证；
-     * - 其余情况（冷启动：实例先建、凭证后到，通道从未起来；或微信/飞书
+     * - wecom 通道在线（activeInstance 存在）→ reconnect() 热替换凭证，
+     *   并等待认证成功；认证失败则落入 reload 兜底（不能只 warn 了事：
+     *   未认证的连接收不到消息，/bind 会一直无响应）。
+     * - 其余情况（冷启动：实例先建、凭证后到，通道从未起来；或者微信/飞书
      *   换号需要重开轮询）→ 调 im-channel 服务 reload() 强制重建路由，
      *   不依赖 settings 变化触发 onChange。
      */

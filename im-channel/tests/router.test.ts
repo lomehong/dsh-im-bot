@@ -24,6 +24,8 @@ class FakeChannel implements ImChannel {
   readonly label = '飞书'
   configured = true
   connected = false
+  connectCalls = 0
+  stoppedCalls = 0
   connectFails = false
   sendFails = false
   sent: OutboundMessage[] = []
@@ -36,6 +38,7 @@ class FakeChannel implements ImChannel {
   async connect(): Promise<void> {
     if (this.connectFails) throw new Error('connect boom')
     this.connected = true
+    this.connectCalls += 1
   }
   onMessage(handler: (message: InboundMessage) => void): void { this.handler = handler }
   async send(_target: ReplyTarget, message: OutboundMessage): Promise<void> {
@@ -52,7 +55,7 @@ class FakeChannel implements ImChannel {
     this.deadReported.push('wired')
     void handler('token stale')
   }
-  async stop(): Promise<void> {}
+  async stop(): Promise<void> { this.stoppedCalls += 1 }
   /** Test helper: feed one inbound message into the router. */
   receive(text: string, userId = 'ou_user1'): void {
     this.handler?.({ from: { kind: this.kind, userId: userId as ImUserId }, text, messageId: `m-${Math.random()}` })
@@ -175,6 +178,30 @@ describe('router.start', () => {
     const h = await makeRouter()
     expect(h.channel.deadReported).toContain('wired')
     expect(h.logs.some(line => line.includes('已掉线') && line.includes('token stale'))).toBe(true)
+  })
+
+  it('second start() is a no-op: no duplicate connect, no double-routed messages', async () => {
+    const h = await makeRouter()
+    // 历史 bug：effect 闭包竞态会对同一 router 双重 start → handler
+    // 重复注册 → 每条消息被路由两次 + 重复 connect 泄漏僵尸连接。
+    await h.router.start()
+    expect(h.channel.connectCalls).toBe(1)
+    h.channel.receive('/bind', 'ou_first')
+    await settle()
+    expect(h.driver.started.length).toBe(1)
+    expect(h.channel.sent.filter(m => m.text.includes('认领成功')).length).toBe(1)
+  })
+
+  it('stop() is terminal: a late start cannot resurrect a disposed router', async () => {
+    const channel = new FakeChannel()
+    const router = new Router({ channels: [channel], driver: new FakeDriver(), store: new FakeStore() })
+    // dispose 先于（延迟的）effect 启动的场景：stop 后迟到的 start
+    // 不得把旧 router 复活成僵尸与新路由争抢长连接。
+    await router.stop()
+    expect(channel.stoppedCalls).toBe(1)
+    await router.start()
+    expect(channel.connected).toBe(false)
+    expect(channel.connectCalls).toBe(0)
   })
 })
 

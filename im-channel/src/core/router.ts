@@ -166,6 +166,10 @@ export class Router {
 
   /** The wired channels (readonly view for topology reconciliation). */
   readonly channels: readonly ImChannel[]
+  /** start/stop 重入守卫（见 start 注释）；stopped 为终态：重建路由时
+   * dispose 可能先于延迟的 effect 启动，被停掉的 router 不允许复活。 */
+  private started = false
+  private stopped = false
 
   constructor(private readonly deps: RouterDeps) {
     this.commandPrefix = deps.config?.commandPrefix ?? '/'
@@ -178,6 +182,13 @@ export class Router {
 
   /** Wire all channels' inbound handlers to routeMessage and connect them. */
   async start(): Promise<void> {
+    // 重入守卫：重复 start 会重复注册 onMessage/onApprovalAction handler
+    // （每条消息被路由两次）并重复 connect（僵尸连接）。历史曾踩：
+    // effect 闭包竞态导致同一 router 被两个 effect 各启动一次。
+    // 已 stop 的 router 为终态：dispose 先于 effect 启动时，迟到的
+    // start 不得把它复活成僵尸（旧通道会与新路由争抢长连接）。
+    if (this.started || this.stopped) return
+    this.started = true
     // Connect channels independently: one platform being down must not stop
     // the others from listening, and failures surface as logs, not rejects.
     await Promise.all(this.deps.channels.map(async channel => {
@@ -201,6 +212,9 @@ export class Router {
   }
 
   async stop(): Promise<void> {
+    if (this.stopped) return
+    this.stopped = true
+    this.started = false
     await Promise.all(this.deps.channels.map(async channel => channel.stop()))
   }
 

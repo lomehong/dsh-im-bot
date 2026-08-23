@@ -161,6 +161,10 @@ export declare class Router {
     private startUserSession;
     /** The wired channels (readonly view for topology reconciliation). */
     readonly channels: readonly ImChannel[];
+    /** start/stop 重入守卫（见 start 注释）；stopped 为终态：重建路由时
+     * dispose 可能先于延迟的 effect 启动，被停掉的 router 不允许复活。 */
+    private started;
+    private stopped;
     constructor(deps: RouterDeps);
     private log;
     /** Wire all channels' inbound handlers to routeMessage and connect them. */

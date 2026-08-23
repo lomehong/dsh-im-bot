@@ -49,11 +49,40 @@ export declare class WecomChannel implements ImChannel {
     private approvalHandlers;
     /** 用于区分 SDK 端事件与我们的定时器 */
     private cleanTimer;
+    /** 认证状态跟踪：企微只认「最新活跃连接」，未认证成功的连接收不到消息，
+     * 拉起方必须拿到 authenticated 证据才算上线成功（生产曾踩：连上了但
+     * 未认证，/bind 无响应直到重启）。 */
+    private authenticated;
+    /** 连续认证失败次数（认证成功即清零） */
+    private authFailures;
+    /** 连续认证失败达到该值视为凭证不可用（密钥错/机器人被删） */
+    private static readonly AUTH_FAILURE_LIMIT;
+    private authWaiters;
     constructor(options?: WecomChannelOptions);
     private log;
     isConfigured(): boolean;
     connect(): Promise<void>;
-    /** 使用最新凭证重新连接（凭证文件已更新后调用） */
+    /** 停掉当前 WSClient 与清理定时器（connect 幂等守卫与 stop 共用）。 */
+    private teardownClient;
+    /** 认证成功：唤醒所有 waitAuthenticated 等待者。 */
+    private settleAuthWaiters;
+    /**
+     * 错误事件可能是瞬时网络问题，也可能是凭证被拒；仅在未认证时累计失败数，
+     * 达到上限才判死（密钥错误/机器人被删），唤醒等待者以失败。
+     */
+    private noteAuthFailure;
+    /**
+     * 等待认证成功（拉起验证）。resolve = 已通过认证可收消息；
+     * reject = 超时或连续认证失败判死。供 reconnect/bringChannelUp 拿到
+     * 「真正上线」的证据，而不是「socket 建上了」的假阳性。
+     */
+    waitAuthenticated(timeoutMs?: number): Promise<void>;
+    /**
+     * 使用最新凭证重新连接（凭证文件已更新后调用）。
+     * 等待认证成功才算完成；失败抛错，让调用方（bringChannelUp）兜底
+     * 全量 reload——生产曾踩：reconnect 只建连不验证，连接未认证时
+     * 调用方以为已上线，/bind 一直无响应。
+     */
     reconnect(): Promise<void>;
     /** 下载企微图片（URL 5 分钟有效；长连接模式返回 AES 加密数据需解密）。 */
     private dispatchImage;

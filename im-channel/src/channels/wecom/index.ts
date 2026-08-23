@@ -110,6 +110,15 @@ export class WecomChannel implements ImChannel {
   private approvalHandlers: Array<(action: ApprovalAction) => void> = []
   /** 用于区分 SDK 端事件与我们的定时器 */
   private cleanTimer: NodeJS.Timeout | undefined
+  /** 认证状态跟踪：企微只认「最新活跃连接」，未认证成功的连接收不到消息，
+   * 拉起方必须拿到 authenticated 证据才算上线成功（生产曾踩：连上了但
+   * 未认证，/bind 无响应直到重启）。 */
+  private authenticated = false
+  /** 连续认证失败次数（认证成功即清零） */
+  private authFailures = 0
+  /** 连续认证失败达到该值视为凭证不可用（密钥错/机器人被删） */
+  private static readonly AUTH_FAILURE_LIMIT = 5
+  private authWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = []
 
   constructor(private readonly options: WecomChannelOptions = {}) {}
 
@@ -126,6 +135,13 @@ export class WecomChannel implements ImChannel {
     if (credentials === undefined) {
       throw new Error('企业微信通道未配置：请先在企业微信管理后台获取 BotID 和 Secret 并保存')
     }
+
+    // 幂等守卫：重复调用（路由双启动 / reconnect 竞态）曾泄漏僵尸
+    // WSClient——企微单活跃连接模型下，僵尸连接与新连接互相踢，平台
+    // 消息推送中断，表现为 /bind 无响应直到重启。先彻底停掉旧连接再建新的。
+    this.teardownClient()
+    this.authenticated = false
+    this.authFailures = 0
 
     // 定时清理过期的 seenMessageIds 和 recentFrames
     this.cleanTimer = setInterval(() => { this.pruneStale() }, 60_000)
@@ -147,10 +163,15 @@ export class WecomChannel implements ImChannel {
 
     this.client.on('authenticated', () => {
       this.log('wecom 认证成功')
+      this.authenticated = true
+      this.authFailures = 0
+      this.settleAuthWaiters()
     })
 
     this.client.on('disconnected', (reason: string) => {
       this.log(`wecom 连接断开: ${reason}`)
+      // 断开即失去认证状态；SDK 自身会无限重连，成功后重新置位。
+      this.authenticated = false
     })
 
     this.client.on('reconnecting', (attempt: number) => {
@@ -159,6 +180,7 @@ export class WecomChannel implements ImChannel {
 
     this.client.on('error', (err: Error) => {
       this.log(`wecom 错误: ${err.message}`)
+      this.noteAuthFailure(err.message)
     })
 
     // 注册消息事件
@@ -236,18 +258,79 @@ export class WecomChannel implements ImChannel {
     WecomChannel.activeInstance = this
   }
 
-  /** 使用最新凭证重新连接（凭证文件已更新后调用） */
+  /** 停掉当前 WSClient 与清理定时器（connect 幂等守卫与 stop 共用）。 */
+  private teardownClient(): void {
+    if (this.client !== undefined) {
+      this.client.disconnect()
+      this.client = undefined
+    }
+    if (this.cleanTimer !== undefined) {
+      clearInterval(this.cleanTimer)
+      this.cleanTimer = undefined
+    }
+    this.authenticated = false
+    this.settleAuthWaiters(new Error('企业微信通道已被停止'))
+  }
+
+  /** 认证成功：唤醒所有 waitAuthenticated 等待者。 */
+  private settleAuthWaiters(error?: Error): void {
+    const waiters = this.authWaiters
+    this.authWaiters = []
+    for (const waiter of waiters) {
+      if (error === undefined) waiter.resolve()
+      else waiter.reject(error)
+    }
+  }
+
+  /**
+   * 错误事件可能是瞬时网络问题，也可能是凭证被拒；仅在未认证时累计失败数，
+   * 达到上限才判死（密钥错误/机器人被删），唤醒等待者以失败。
+   */
+  private noteAuthFailure(message: string): void {
+    if (this.authenticated) return
+    this.authFailures += 1
+    if (this.authFailures >= WecomChannel.AUTH_FAILURE_LIMIT) {
+      this.log(`wecom 连续 ${this.authFailures} 次认证失败，判定凭证不可用: ${message}`)
+      this.settleAuthWaiters(new Error(`企业微信认证持续失败（${this.authFailures} 次）：请检查 BotID/Secret 是否有效。最近错误: ${message}`))
+      this.reportDead(`连续 ${this.authFailures} 次认证失败，凭证可能无效`)
+    }
+  }
+
+  /**
+   * 等待认证成功（拉起验证）。resolve = 已通过认证可收消息；
+   * reject = 超时或连续认证失败判死。供 reconnect/bringChannelUp 拿到
+   * 「真正上线」的证据，而不是「socket 建上了」的假阳性。
+   */
+  async waitAuthenticated(timeoutMs = 15_000): Promise<void> {
+    if (this.authenticated) return
+    return await new Promise<void>((resolve, reject) => {
+      const waiter = { resolve, reject }
+      this.authWaiters.push(waiter)
+      const timer = setTimeout(() => {
+        const index = this.authWaiters.indexOf(waiter)
+        if (index >= 0) this.authWaiters.splice(index, 1)
+        reject(new Error(`企业微信等待认证超时（${timeoutMs}ms）：连接可能未真正上线`))
+      }, timeoutMs)
+      timer.unref?.()
+    })
+  }
+
+  /**
+   * 使用最新凭证重新连接（凭证文件已更新后调用）。
+   * 等待认证成功才算完成；失败抛错，让调用方（bringChannelUp）兜底
+   * 全量 reload——生产曾踩：reconnect 只建连不验证，连接未认证时
+   * 调用方以为已上线，/bind 一直无响应。
+   */
   async reconnect(): Promise<void> {
     this.log('wecom 凭证已更新，正在重新连接...')
-    // 断开旧连接（如果有）
-    this.client?.disconnect()
-    this.client = undefined
-    // 清理状态
+    // 清理消息态缓存（旧连接的帧/去重记录对新连接无意义）
     this.recentFrames.clear()
     this.latestReqId.clear()
     this.seenMessageIds.clear()
-    // 重新连接（connect() 会从文件读取最新凭证）
+    // connect() 内部先停旧连接再建新连接，并从文件读取最新凭证
     await this.connect()
+    await this.waitAuthenticated()
+    this.log('wecom 重连完成：已认证，可正常收发消息')
   }
 
   /** 下载企微图片（URL 5 分钟有效；长连接模式返回 AES 加密数据需解密）。 */
@@ -426,14 +509,7 @@ export class WecomChannel implements ImChannel {
   }
 
   async stop(): Promise<void> {
-    if (this.client !== undefined) {
-      this.client.disconnect()
-      this.client = undefined
-    }
-    if (this.cleanTimer !== undefined) {
-      clearInterval(this.cleanTimer)
-      this.cleanTimer = undefined
-    }
+    this.teardownClient()
   }
 
   /** 清理过期缓存的帧和消息 ID */

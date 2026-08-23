@@ -344,11 +344,16 @@ export function apply(ctx, config) {
                 });
             },
         });
+        // effect 闭包必须捕获当前 router 实例：外层 `let router` 是惰性读取，
+        // cordis async effect 的生成器体延迟一个 microtask 才执行——连续两次
+        // rebuildRouter 时，第一个 effect 会误启动第二个 router（双重 start →
+        // 双重 connect → 僵尸 WSClient，企微单活跃连接下消息推送中断）。
+        const owned = router;
         void ctx.effect(async function* () {
-            await router?.start();
-            yield () => { void router?.stop(); };
+            await owned.start();
+            yield () => { void owned.stop(); };
         }, 'im-channel.router');
-        disposeRouter = () => { void router?.stop(); router = undefined; };
+        disposeRouter = () => { void owned.stop(); router = undefined; };
     };
     installSettingsSection(ctx, NS, Config, config, {
         setSource: (source) => { section.adopt(source); },
@@ -399,7 +404,9 @@ async function ensureInstancesForCredentials(ctx, next) {
     if (!changed)
         return;
     try {
-        await ctx.settings.update(NS, { channels: patch });
+        // 合并写：settings.update 对 channels dict 是整体替换语义，只写新行
+        // 会抹掉已声明的其他平台实例；保留现有行再追加。
+        await ctx.settings.update(NS, { channels: { ...next.channels, ...patch } });
     }
     catch (error) {
         ctx.logger.warn(`im-channel: 为已登录平台自动创建实例失败: ${error instanceof Error ? error.message : String(error)}`);

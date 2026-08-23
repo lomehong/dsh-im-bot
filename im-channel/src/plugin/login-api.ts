@@ -516,8 +516,12 @@ export class LoginApi {
               resolve(true)
               return
             }
+            // 合并写：settings.update 对 channels dict 是整体替换语义，
+            // 只写新行会抹掉其他平台已声明的实例（生产曾踩：配完企微
+            // 后飞书/微信实例行消失）。保留现有行再追加。
             await sctx.settings.update(NS, {
               channels: {
+                ...channels,
                 [`${kind}-1`]: { kind, enabled: true, displayName: `${KIND_LABELS[kind]}机器人 1` },
               },
             })
@@ -537,8 +541,10 @@ export class LoginApi {
 
   /**
    * 凭证保存成功后让通道尽快上线。两条路：
-   * - wecom 通道在线（activeInstance 存在）→ reconnect() 热替换凭证；
-   * - 其余情况（冷启动：实例先建、凭证后到，通道从未起来；或微信/飞书
+   * - wecom 通道在线（activeInstance 存在）→ reconnect() 热替换凭证，
+   *   并等待认证成功；认证失败则落入 reload 兜底（不能只 warn 了事：
+   *   未认证的连接收不到消息，/bind 会一直无响应）。
+   * - 其余情况（冷启动：实例先建、凭证后到，通道从未起来；或者微信/飞书
    *   换号需要重开轮询）→ 调 im-channel 服务 reload() 强制重建路由，
    *   不依赖 settings 变化触发 onChange。
    */
@@ -550,9 +556,9 @@ export class LoginApi {
           await WecomChannel.activeInstance.reconnect()
           return
         } catch (e) {
-          // 重连失败不影响凭证保存；通道在下次重建/重启后生效。
-          this.ctx.logger.warn(`im-channel: 企业微信重连失败: ${messageOf(e)}`)
-          return
+          // 重连/认证失败：不能就此罢休（连接可能未真正上线），
+          // 落入下方 reload 全量重建兜底。
+          this.ctx.logger.warn(`im-channel: 企业微信热重连失败，尝试全量重建路由: ${messageOf(e)}`)
         }
       }
     }

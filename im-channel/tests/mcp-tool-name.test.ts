@@ -7,14 +7,20 @@ describe('sanitizeServerName', () => {
     expect(sanitizeServerName('wecom-server_1')).toBe('wecom-server_1')
   })
 
-  it('replaces illegal characters (incl. CJK) with underscore', () => {
-    expect(sanitizeServerName('待办服务器')).toBe('_____')
+  it('maps pure-CJK names to a stable distinguishing hash', () => {
+    // 纯非 ASCII 名清洗后只剩下划线，多个中文 server 会撞名：
+    // 改用稳定 FNV-1a 哈希片段（见 mcp-tool-name.ts 注释）。
+    expect(sanitizeServerName('待办服务器')).toMatch(/^srv_[0-9a-f]{8}$/)
+    // 同名稳定：同一输入永远归一化到同一片段。
+    expect(sanitizeServerName('待办服务器')).toBe(sanitizeServerName('待办服务器'))
+    // 不同中文名片段不同（可区分）。
+    expect(sanitizeServerName('待办服务器')).not.toBe(sanitizeServerName('日程服务器'))
   })
 
   it('falls back to a placeholder only for empty input', () => {
     expect(sanitizeServerName('')).toBe('server')
-    // '$$$' 替换后为 '___'（非空），保留下划线而非占位符
-    expect(sanitizeServerName('$$$')).toBe('___')
+    // '$$$' 清洗后只剩下划线，与纯 CJK 同样走稳定哈希分支（可区分）。
+    expect(sanitizeServerName('$$$')).toMatch(/^srv_[0-9a-f]{8}$/)
   })
 })
 
@@ -23,9 +29,10 @@ describe('publicMcpToolName', () => {
     expect(publicMcpToolName('wecom', 'list-meetings')).toBe('mcp__wecom__list-meetings')
   })
 
-  it('sanitizes CJK server names', () => {
-    // 待办 → '__'，拼上前后分隔符：mcp__ + __ + __ + add
-    expect(publicMcpToolName('待办', 'add')).toBe('mcp______add')
+  it('sanitizes CJK server names via stable hash', () => {
+    // 待办 → srv_<hash>，拼上前后分隔符：mcp__ + srv_xxxx + __ + add
+    expect(publicMcpToolName('待办', 'add')).toMatch(/^mcp__srv_[0-9a-f]{8}__add$/)
+    expect(publicMcpToolName('待办', 'add')).toBe(publicMcpToolName('待办', 'add'))
   })
 
   it('stays within 64 chars and legal charset for long raw names', () => {
