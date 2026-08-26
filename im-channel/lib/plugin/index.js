@@ -30,6 +30,8 @@ export const Config = z.object({
     allowlist: z.array(z.string()).default([]),
     guestTools: z.array(z.string()).default([]),
     guestCommands: z.array(z.string()).default([...DEFAULT_GUEST_COMMANDS]),
+    /** 分身会话的审批策略：默认 ask（敏感操作需 Owner 审批），比全局 never 更严。 */
+    approval: z.union(['ask', 'never']).default('ask'),
 });
 function isCredentialled(kind) {
     switch (kind) {
@@ -193,6 +195,7 @@ export function apply(ctx, config) {
     const driver = new HarnessDriver(ctx, {
         mcpRegistry,
         guestTools: () => section.read().guestTools ?? [],
+        approval: () => section.read().approval ?? 'ask',
         // 非本插件驱动轮次的产出（schedule 提醒、yuyi 唤醒、竞态尾巴）
         // 主动推送到该会话绑定用户的 IM——网页端看得到的，手机上也看得到。
         onBackgroundMessage: (sessionId, messageText) => {

@@ -72,6 +72,8 @@ export class HarnessDriver implements AgentDriver {
   private readonly mcpRegistry: WecomMcpRegistry | undefined
   /** 访客工具白名单（设置实时读取）；决定 tools.guard 是否放行当前轮的工具调用 */
   private readonly guestTools: () => readonly string[]
+  /** 分身会话审批策略（默认 ask，比全局 never 更严）；applyAvatarApproval 使用。 */
+  private readonly approval: () => 'ask' | 'never'
   /** 当前轮发起者信息（角色 + userId），按会话记录；工具守卫/审批按此归因 */
   private readonly turnInfos = new Map<string, { actor: 'owner' | 'guest'; userId: string }>()
   /** 无 inflight 轮次时的定稿输出缓冲（去抖后主动推送）。 */
@@ -87,6 +89,8 @@ export class HarnessDriver implements AgentDriver {
       agentOptions?: AgentOptions
       mcpRegistry?: WecomMcpRegistry
       guestTools?: () => readonly string[]
+      /** 分身会话审批策略：默认 ask，比全局 never 更严。 */
+      approval?: () => 'ask' | 'never'
       /** 访客工具审批：把决策交给插件层（推卡片给 Owner、等待 IM 回复）。 */
       onOwnerApproval?: (info: { sessionId: string; toolName: string; reason: string | undefined; guestUserId: string | undefined; isOwnerTrigger: boolean }) => Promise<'allowed-once' | 'rejected'> | undefined
       /** 非本插件驱动轮次的定稿输出（schedule/yuyi 唤醒、竞态尾巴）→ 主动推送 IM。 */
@@ -98,6 +102,7 @@ export class HarnessDriver implements AgentDriver {
     this.agents = ctx.agents
     this.mcpRegistry = options.mcpRegistry
     this.guestTools = options.guestTools ?? ((): readonly string[] => [])
+    this.approval = options.approval ?? ((): 'ask' | 'never' => 'ask')
     // One plugin-lifetime teardown for all owned agents. Registering per
     // session via ctx.effect inside async callbacks attached the disposers to
     // whatever fiber was running the callback (e.g. a router rebuild's
@@ -254,10 +259,28 @@ export class HarnessDriver implements AgentDriver {
       },
     })
     this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined })
+    // 分身会话审批策略 override：比全局 never 更严（默认 ask）
+    this.applyAvatarApproval(handle.agent)
     // 注入共享记忆摘要到 agent 上下文
     this.injectMemoryContext(handle.agent, options.userId, options.isMaster)
     this.ctx.logger?.info?.(`resumeSession ${sessionId.slice(0, 15)}… owned=${this.owned.size} (driver ${this.instanceId})`)
     return sessionId
+  }
+
+  /** 把分身会话的审批策略收敛为一个可配置项（默认 ask）。 */
+  private applyAvatarApproval(agent: Agent): void {
+    try {
+      const approvalSvc = this.ctx.get('approval') as { setPolicy?: (agent: Agent, policy: 'ask' | 'never') => void } | undefined
+      const policy = this.approval()
+      if (approvalSvc !== undefined && typeof approvalSvc.setPolicy === 'function' && agent !== undefined) {
+        approvalSvc.setPolicy(agent, policy)
+        this.ctx.logger?.info?.(`[im-channel] 分身审批策略=${policy}`)
+      }
+    }
+    catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      this.ctx.logger?.warn?.(`[im-channel] 设置分身审批策略失败: ${msg}`)
+    }
   }
 
   /** Create (or resume) an agent with the gateway-equivalent composition. */
@@ -309,6 +332,8 @@ export class HarnessDriver implements AgentDriver {
       },
     })
     this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined })
+    // 分身会话审批策略 override：比全局 never 更严（默认 ask）
+    this.applyAvatarApproval(handle.agent)
     // 注入共享记忆摘要到 agent 上下文（让 agent 知道有记忆可以读取）
     this.injectMemoryContext(handle.agent, userId, isMaster)
     await this.attachWorkspace(handle.agent.id, cwd)

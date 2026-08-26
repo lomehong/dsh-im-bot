@@ -33,6 +33,7 @@ export class HarnessDriver {
         this.agents = ctx.agents;
         this.mcpRegistry = options.mcpRegistry;
         this.guestTools = options.guestTools ?? (() => []);
+        this.approval = options.approval ?? (() => 'ask');
         // One plugin-lifetime teardown for all owned agents. Registering per
         // session via ctx.effect inside async callbacks attached the disposers to
         // whatever fiber was running the callback (e.g. a router rebuild's
@@ -200,10 +201,26 @@ export class HarnessDriver {
             },
         });
         this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });
+        // 分身会话审批策略 override：比全局 never 更严（默认 ask）
+        this.applyAvatarApproval(handle.agent);
         // 注入共享记忆摘要到 agent 上下文
         this.injectMemoryContext(handle.agent, options.userId, options.isMaster);
         this.ctx.logger?.info?.(`resumeSession ${sessionId.slice(0, 15)}… owned=${this.owned.size} (driver ${this.instanceId})`);
         return sessionId;
+    }
+    /** 把分身会话的审批策略收敛为一个可配置项（默认 ask）。 */
+    applyAvatarApproval(agent) {
+        try {
+            const approvalSvc = this.ctx.get('approval');
+            const policy = this.approval();
+            if (approvalSvc !== undefined && typeof approvalSvc.setPolicy === 'function' && agent !== undefined) {
+                approvalSvc.setPolicy(agent, policy);
+                this.ctx.logger?.info?.(`[im-channel] 分身审批策略=${policy}`);
+            }
+        }
+        catch (error) {
+            this.ctx.logger?.warn?.('[im-channel] 设置分身审批策略失败:', error instanceof Error ? error.message : String(error));
+        }
     }
     /** Create (or resume) an agent with the gateway-equivalent composition. */
     async createAgent(sessionId, cwd, userId, isMaster) {
@@ -251,6 +268,8 @@ export class HarnessDriver {
             },
         });
         this.owned.set(handle.agent.id, { agent: handle.agent, inflight: undefined });
+        // 分身会话审批策略 override：比全局 never 更严（默认 ask）
+        this.applyAvatarApproval(handle.agent);
         // 注入共享记忆摘要到 agent 上下文（让 agent 知道有记忆可以读取）
         this.injectMemoryContext(handle.agent, userId, isMaster);
         await this.attachWorkspace(handle.agent.id, cwd);

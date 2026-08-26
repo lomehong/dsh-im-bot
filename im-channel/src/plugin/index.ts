@@ -56,6 +56,8 @@ export const Config = z.object({
   allowlist: z.array(z.string()).default([]),
   guestTools: z.array(z.string()).default([]),
   guestCommands: z.array(z.string()).default([...DEFAULT_GUEST_COMMANDS]),
+  /** 分身会话的审批策略：默认 ask（敏感操作需 Owner 审批），比全局 never 更严。 */
+  approval: z.union(['ask', 'never']).default('ask'),
 }) as unknown as z<ImChannelSection>
 
 function isCredentialled(kind: ChannelKind): boolean {
