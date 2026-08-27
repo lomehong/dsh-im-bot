@@ -257,6 +257,7 @@ export class HarnessDriver implements AgentDriver {
         }
         // 注册共享记忆工具
         this.mountSharedMemory(agentCtx, options.userId, options.isMaster)
+        this.noteTwinActor(agentCtx, options.isMaster)
         this.mountAskUserTool(agentCtx, sessionId)
       },
     })
@@ -341,6 +342,7 @@ export class HarnessDriver implements AgentDriver {
         }
         // 注入共享记忆（如果 dsh-memory 插件已加载）
         this.mountSharedMemory(agentCtx, userId, isMaster)
+        this.noteTwinActor(agentCtx, isMaster)
         this.mountAskUserTool(agentCtx, createOptions.sessionId)
       },
     })
@@ -444,6 +446,20 @@ export class HarnessDriver implements AgentDriver {
       if (workspace !== undefined) await workspace.attachSession(sessionId)
     } catch {
       // Path not resolvable or registry busy: session stays ungrouped.
+    }
+  }
+
+  /**
+   * 数字分身双视图：把对话者角色标注给 dsh-twin（插件在位时），
+   * 其人格段组装时据此渲染主人/访客视图（background/values 只进主人视图）。
+   * 软依赖：dsh-twin 缺席时静默跳过，绝不影响会话创建。
+   */
+  private noteTwinActor(agentCtx: unknown, isMaster?: boolean): void {
+    try {
+      const twin = this.ctx.get('dsh-twin') as { noteActor?: (agentCtx: unknown, info: { isMaster: boolean }) => void } | undefined
+      twin?.noteActor?.(agentCtx, { isMaster: isMaster ?? false })
+    } catch {
+      /* 分身钩子失败不影响会话创建 */
     }
   }
 

@@ -19,6 +19,8 @@ export declare class HarnessDriver implements AgentDriver {
     private readonly mcpRegistry;
     /** 访客工具白名单（设置实时读取）；决定 tools.guard 是否放行当前轮的工具调用 */
     private readonly guestTools;
+    /** 分身会话审批策略（默认 ask，比全局 never 更严）；applyAvatarApproval 使用。 */
+    private readonly approval;
     /** 当前轮发起者信息（角色 + userId），按会话记录；工具守卫/审批按此归因 */
     private readonly turnInfos;
     /** 无 inflight 轮次时的定稿输出缓冲（去抖后主动推送）。 */
@@ -32,6 +34,8 @@ export declare class HarnessDriver implements AgentDriver {
         agentPreset?: () => string | undefined;
         mcpRegistry?: WecomMcpRegistry;
         guestTools?: () => readonly string[];
+        /** 分身会话审批策略：默认 ask，比全局 never 更严。 */
+        approval?: () => 'ask' | 'never';
         /** 访客工具审批：把决策交给插件层（推卡片给 Owner、等待 IM 回复）。 */
         onOwnerApproval?: (info: {
             sessionId: string;
@@ -55,6 +59,8 @@ export declare class HarnessDriver implements AgentDriver {
      * world through the same preset setup as create.
      */
     resumeSession(sessionId: string, options?: SessionOptions): Promise<string>;
+    /** 把分身会话的审批策略收敛为一个可配置项（默认 ask）。 */
+    private applyAvatarApproval;
     /** Create (or resume) an agent with the gateway-equivalent composition. */
     private createAgent;
     /**
@@ -78,6 +84,12 @@ export declare class HarnessDriver implements AgentDriver {
     compact(sessionId: string): Promise<boolean>;
     /** Group the session under the workspace owning its cwd, when registered. */
     private attachWorkspace;
+    /**
+     * 数字分身双视图：把对话者角色标注给 dsh-twin（插件在位时），
+     * 其人格段组装时据此渲染主人/访客视图（background/values 只进主人视图）。
+     * 软依赖：dsh-twin 缺席时静默跳过，绝不影响会话创建。
+     */
+    private noteTwinActor;
     /**
      * 注入共享记忆服务（如果 dsh-memory 插件已加载）。
      * 先即时查询服务；若不可用（插件尚未加载/ACTIVE），用 ctx.inject 延迟注册——

@@ -21,6 +21,8 @@ export class HarnessDriver {
     mcpRegistry;
     /** 访客工具白名单（设置实时读取）；决定 tools.guard 是否放行当前轮的工具调用 */
     guestTools;
+    /** 分身会话审批策略（默认 ask，比全局 never 更严）；applyAvatarApproval 使用。 */
+    approval;
     /** 当前轮发起者信息（角色 + userId），按会话记录；工具守卫/审批按此归因 */
     turnInfos = new Map();
     /** 无 inflight 轮次时的定稿输出缓冲（去抖后主动推送）。 */
@@ -197,6 +199,7 @@ export class HarnessDriver {
                 }
                 // 注册共享记忆工具
                 this.mountSharedMemory(agentCtx, options.userId, options.isMaster);
+                this.noteTwinActor(agentCtx, options.isMaster);
                 this.mountAskUserTool(agentCtx, sessionId);
             },
         });
@@ -219,7 +222,8 @@ export class HarnessDriver {
             }
         }
         catch (error) {
-            this.ctx.logger?.warn?.('[im-channel] 设置分身审批策略失败:', error instanceof Error ? error.message : String(error));
+            const msg = error instanceof Error ? error.message : String(error);
+            this.ctx.logger?.warn?.(`[im-channel] 设置分身审批策略失败: ${msg}`);
         }
     }
     /** Create (or resume) an agent with the gateway-equivalent composition. */
@@ -276,6 +280,7 @@ export class HarnessDriver {
                 }
                 // 注入共享记忆（如果 dsh-memory 插件已加载）
                 this.mountSharedMemory(agentCtx, userId, isMaster);
+                this.noteTwinActor(agentCtx, isMaster);
                 this.mountAskUserTool(agentCtx, createOptions.sessionId);
             },
         });
@@ -387,6 +392,20 @@ export class HarnessDriver {
         }
         catch {
             // Path not resolvable or registry busy: session stays ungrouped.
+        }
+    }
+    /**
+     * 数字分身双视图：把对话者角色标注给 dsh-twin（插件在位时），
+     * 其人格段组装时据此渲染主人/访客视图（background/values 只进主人视图）。
+     * 软依赖：dsh-twin 缺席时静默跳过，绝不影响会话创建。
+     */
+    noteTwinActor(agentCtx, isMaster) {
+        try {
+            const twin = this.ctx.get('dsh-twin');
+            twin?.noteActor?.(agentCtx, { isMaster: isMaster ?? false });
+        }
+        catch {
+            /* 分身钩子失败不影响会话创建 */
         }
     }
     /**
