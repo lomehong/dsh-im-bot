@@ -20,6 +20,8 @@ export interface ImChannelSection {
     guestTools: string[];
     /** 访客可用的命令（canonical id）；默认帮助/状态/回复/停止。 */
     guestCommands: string[];
+    /** IM 会话显式使用的 agent 预设 id；空 = 跟随全局默认预设。 */
+    agentPreset: string;
 }
 export declare const Config: z<ImChannelSection>;
 export declare function apply(ctx: Context, config: ImChannelSection): void;

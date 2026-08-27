@@ -247,7 +247,19 @@ export class HarnessDriver {
         // model gets zero tools and a stub persona, and any tool-shaped reply
         // fails. Mirror the gateway composition here.
         const presets = this.ctx.get('agentPresets');
-        const resolvedPreset = presets === undefined ? undefined : await presets.resolve(undefined);
+        // 显式预设优先（设置项 agentPreset，如 'digital-twin'）；空 = 沿用全局默认预设。
+        // 这把 IM 会话的人格与「全局默认预设」解耦：主人日常默认 standard 不受影响，
+        // IM 侧仍稳定走分身预设——安全边界不再悬挂在"默认预设恰好没被改"上。
+        const presetId = this.options.agentPreset?.() || undefined;
+        let resolvedPreset;
+        try {
+            resolvedPreset = presets === undefined ? undefined : await presets.resolve(presetId);
+        }
+        catch {
+            // 指定的预设不存在时回落默认，不得让 IM 会话创建失败
+            resolvedPreset = undefined;
+        }
+        const mountId = resolvedPreset === undefined ? undefined : resolvedPreset.id;
         const handle = await this.agents.create({
             sessionId: createOptions.sessionId,
             meta: {
@@ -257,7 +269,7 @@ export class HarnessDriver {
             ...createOptions.agentOptions === undefined ? {} : { agentOptions: createOptions.agentOptions },
             setup: async (agentCtx) => {
                 if (presets !== undefined)
-                    await presets.mount(agentCtx, undefined);
+                    await presets.mount(agentCtx, mountId);
                 // 注册 MCP 工具
                 if (this.mcpRegistry !== undefined) {
                     await this.mcpRegistry.registerToAgent(agentCtx);

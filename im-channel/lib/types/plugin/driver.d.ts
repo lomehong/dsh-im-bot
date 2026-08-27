@@ -28,6 +28,8 @@ export declare class HarnessDriver implements AgentDriver {
     constructor(ctx: Context, options?: {
         cwd?: string;
         agentOptions?: AgentOptions;
+        /** IM 会话显式使用的 agent 预设（实时读取）；空/未配置 = 全局默认预设 */
+        agentPreset?: () => string | undefined;
         mcpRegistry?: WecomMcpRegistry;
         guestTools?: () => readonly string[];
         /** 访客工具审批：把决策交给插件层（推卡片给 Owner、等待 IM 回复）。 */

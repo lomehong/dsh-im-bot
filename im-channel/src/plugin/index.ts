@@ -40,6 +40,8 @@ export interface ImChannelSection {
   guestTools: string[]
   /** 访客可用的命令（canonical id）；默认帮助/状态/回复/停止。 */
   guestCommands: string[]
+  /** IM 会话显式使用的 agent 预设 id；空 = 跟随全局默认预设。 */
+  agentPreset: string
 }
 
 const KindUnion = z.union(['feishu', 'wechat', 'wecom'])
@@ -58,6 +60,9 @@ export const Config = z.object({
   guestCommands: z.array(z.string()).default([...DEFAULT_GUEST_COMMANDS]),
   /** 分身会话的审批策略：默认 ask（敏感操作需 Owner 审批），比全局 never 更严。 */
   approval: z.union(['ask', 'never']).default('ask'),
+  /** IM 会话显式使用的 agent 预设 id（如 'digital-twin'）；空 = 跟随全局默认预设。
+   *  设它可把 IM 侧人格与全局默认解耦：主人日常会话用 standard，IM 稳定走分身。 */
+  agentPreset: z.string().default(''),
 }) as unknown as z<ImChannelSection>
 
 function isCredentialled(kind: ChannelKind): boolean {
@@ -220,6 +225,7 @@ export function apply(ctx: Context, config: ImChannelSection): void {
   const driver = new HarnessDriver(ctx, {
     mcpRegistry,
     guestTools: () => section.read().guestTools ?? [],
+    agentPreset: () => section.read().agentPreset || undefined,
     // 非本插件驱动轮次的产出（schedule 提醒、yuyi 唤醒、竞态尾巴）
     // 主动推送到该会话绑定用户的 IM——网页端看得到的，手机上也看得到。
     onBackgroundMessage: (sessionId, messageText) => {
