@@ -10,6 +10,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the webServer Context merge declared by dsh-host-webserver.
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { QrPollCoordinator } from './qr-poll-coordinator.ts'
 
 type LoginKind = 'wechat' | 'feishu' | 'wecom'
 const KINDS: readonly LoginKind[] = ['wechat', 'feishu', 'wecom']
@@ -40,6 +41,17 @@ export class LoginApi {
   private session: QrLoginSession | undefined
   /** 企业微信扫码创建会话（scode），start 时建立、status 轮询消费。 */
   private wecomQr: { scode: string; startedAt: number } | undefined
+  /**
+   * 企业微信扫码轮询协调器：同一 scode 的并发轮询共享一次外部请求
+   * （single-flight），2.5s 内的重复轮询直接回缓存。企微外部接口 10s 超时，
+   * 若无折叠，客户端 1.5~3s 一轮的轮询在外部服务变慢时会堆积并占满浏览器
+   * 每主机 6 连接，拖死整个设置页；折叠后外部调用量上界 = 每客户端轮询
+   * 间隔至多一次，与并发数无关。
+   */
+  private readonly wecomQrPolls = new QrPollCoordinator(async scode => {
+    const { WecomQrAuth } = await import('../channels/wecom/qr-auth.ts')
+    return await new WecomQrAuth().poll(scode)
+  })
 
   constructor(private readonly ctx: Context) {}
 
@@ -309,17 +321,23 @@ export class LoginApi {
           respondJson(res, 400, { ok: false, error: '无效的扫码会话' })
           return
         }
-        const { WecomQrAuth } = await import('../channels/wecom/qr-auth.ts')
-        const poll = await new WecomQrAuth().poll(scode)
-        if (poll.status === 'success') {
+        // single-flight：并发轮询共享同一次外部请求；副作用（存凭证 + 拉起
+        // 通道）链在 poll promise 上恰好执行一次，等待者与缓存命中只回结果。
+        const poll = await this.wecomQrPolls.pollOnce(scode, async result => {
           const { configureWecomBot } = await import('../channels/wecom/login-bridge.ts')
-          await configureWecomBot(poll.botId, poll.secret)
+          await configureWecomBot(result.botId, result.secret)
           // 实例已存在时 onChange 不会触发，需自行拉起通道（冷启动 reload / 在线 reconnect）。
           const existed = await this.ensureChannelInstance('wecom')
           if (existed) await this.bringChannelUp('wecom')
           this.wecomQr = undefined
+        })
+        if (poll.status === 'success') {
           respondJson(res, 200, { ok: true, status: 'confirmed' })
           return
+        }
+        if (poll.status !== 'waiting' && this.wecomQr?.scode === scode) {
+          // expired/failed 终态：清掉本地扫码会话，客户端会提示重新生成。
+          this.wecomQr = undefined
         }
         respondJson(res, 200, { ok: true, status: poll.status })
       } catch (error) {

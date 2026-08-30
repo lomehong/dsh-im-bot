@@ -50,8 +50,14 @@ export function BotChannelTab(props: BotChannelTabProps) {
   const [active, setActive] = useState<boolean>(typeof document === 'undefined' || !document.hidden)
   const loginPollTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
   const bindingsPollTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
+  // 在途守卫：上一轮请求未返回时跳过本轮。没有它，服务端响应一旦慢于
+  // 轮询间隔，请求就会无限堆积并占满浏览器每主机 6 连接，拖死整个设置页。
+  const loginPollInFlight = useRef(false)
+  const bindingsRefreshInFlight = useRef(false)
 
   const refreshBindings = async (): Promise<void> => {
+    if (bindingsRefreshInFlight.current) return
+    bindingsRefreshInFlight.current = true
     try {
       const response = await fetch('/im-channel/bindings')
       const body = await response.json() as { ok: boolean; bindings: BindingRow[] }
@@ -60,6 +66,8 @@ export function BotChannelTab(props: BotChannelTabProps) {
       }
     } catch {
       // Transient fetch failure: keep the last list.
+    } finally {
+      bindingsRefreshInFlight.current = false
     }
   }
 
@@ -163,11 +171,22 @@ export function BotChannelTab(props: BotChannelTabProps) {
   }
 
   const pollStatus = async (): Promise<void> => {
+    // 在途守卫：上一轮 status 请求未返回（服务端卡顿时可长达数秒）就跳过
+    // 本轮 tick，避免请求越堆越多占满连接池。
+    if (loginPollInFlight.current) return
+    loginPollInFlight.current = true
     try {
       const response = await fetch('/im-channel/login/status')
       const body = await response.json() as { ok: boolean; session: LoginStatus | null }
-      if (!body.ok || body.session === null) return
+      if (!body.ok) return
+      // session === null：会话已被主机侧结束（TTL 到期或主机重启过）——
+      // 继续轮询也不会有结果，停表等待用户重新发起登录。
+      if (body.session === null) {
+        stopLoginPolling()
+        return
+      }
       setLogin(body.session)
+      // 主机侧 status 联合类型为 'pending' | 'confirmed' | 'error'，终态即停。
       if (body.session.status === 'confirmed') {
         stopLoginPolling()
         // Scan confirmed: the bind command card appears right after a
@@ -179,6 +198,8 @@ export function BotChannelTab(props: BotChannelTabProps) {
       }
     } catch {
       // Transient fetch failure: keep polling; the TTL on the host side ends it.
+    } finally {
+      loginPollInFlight.current = false
     }
   }
 

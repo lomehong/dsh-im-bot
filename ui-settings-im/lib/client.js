@@ -1825,11 +1825,14 @@ var linkStyle = {
   textDecoration: "underline",
   fontSize: "13px"
 };
+var QR_TTL_FALLBACK_MS = 5 * 6e4;
 function WecomConfigPanel({ onConfigured, onError }) {
   const [qrUrl, setQrUrl] = (0, import_react.useState)(void 0);
   const [polling, setPolling] = (0, import_react.useState)(false);
   const [showManual, setShowManual] = (0, import_react.useState)(false);
   const scodeRef = (0, import_react.useRef)(void 0);
+  const expiresAtRef = (0, import_react.useRef)(void 0);
+  const pollInFlightRef = (0, import_react.useRef)(false);
   const timerRef = (0, import_react.useRef)(void 0);
   const stopPolling = (0, import_react.useCallback)(() => {
     if (timerRef.current !== void 0) {
@@ -1849,6 +1852,7 @@ function WecomConfigPanel({ onConfigured, onError }) {
         return;
       }
       scodeRef.current = data.scode;
+      expiresAtRef.current = data.expiresAt ?? Date.now() + QR_TTL_FALLBACK_MS;
       setQrUrl(data.qrUrl);
       setPolling(true);
       const interval = Math.max(2e3, data.pollIntervalMs ?? 3e3);
@@ -1862,7 +1866,14 @@ function WecomConfigPanel({ onConfigured, onError }) {
   const pollQr = (0, import_react.useCallback)(async () => {
     const scode = scodeRef.current;
     if (scode === void 0) return;
+    if (pollInFlightRef.current) return;
+    pollInFlightRef.current = true;
     try {
+      if (expiresAtRef.current !== void 0 && Date.now() > expiresAtRef.current) {
+        stopPolling();
+        onError("\u4E8C\u7EF4\u7801\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210");
+        return;
+      }
       const resp = await fetch(`/im-channel/wecom/qr/status?scode=${encodeURIComponent(scode)}`);
       const data = await resp.json();
       if (data.ok && data.status === "confirmed") {
@@ -1870,13 +1881,19 @@ function WecomConfigPanel({ onConfigured, onError }) {
         onConfigured();
         return;
       }
-      if (data.ok && (data.status === "expired" || data.status === "failed")) {
+      if (data.ok && data.status === "expired") {
         stopPolling();
-        onError("\u626B\u7801\u5DF2\u8FC7\u671F\u6216\u5931\u8D25\uFF0C\u8BF7\u70B9\u51FB\u4E8C\u7EF4\u7801\u91CD\u8BD5\uFF0C\u6216\u4F7F\u7528\u624B\u52A8\u914D\u7F6E\u3002");
+        onError("\u4E8C\u7EF4\u7801\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210");
+      }
+      if (data.ok && data.status === "failed") {
+        stopPolling();
+        onError("\u626B\u7801\u5931\u8D25\uFF0C\u8BF7\u70B9\u51FB\u4E8C\u7EF4\u7801\u91CD\u8BD5\uFF0C\u6216\u4F7F\u7528\u624B\u52A8\u914D\u7F6E\u3002");
       }
     } catch {
+    } finally {
+      pollInFlightRef.current = false;
     }
-  }, [stopPolling, onConfigured]);
+  }, [stopPolling, onConfigured, onError]);
   (0, import_react.useEffect)(() => {
     return () => {
       if (timerRef.current !== void 0) clearInterval(timerRef.current);
@@ -2588,7 +2605,11 @@ function BotChannelTab(props) {
   const [active, setActive] = (0, import_react4.useState)(typeof document === "undefined" || !document.hidden);
   const loginPollTimer = (0, import_react4.useRef)(void 0);
   const bindingsPollTimer = (0, import_react4.useRef)(void 0);
+  const loginPollInFlight = (0, import_react4.useRef)(false);
+  const bindingsRefreshInFlight = (0, import_react4.useRef)(false);
   const refreshBindings = async () => {
+    if (bindingsRefreshInFlight.current) return;
+    bindingsRefreshInFlight.current = true;
     try {
       const response = await fetch("/im-channel/bindings");
       const body = await response.json();
@@ -2596,6 +2617,8 @@ function BotChannelTab(props) {
         setBindings(body.bindings);
       }
     } catch {
+    } finally {
+      bindingsRefreshInFlight.current = false;
     }
   };
   const removeBinding = async (row) => {
@@ -2684,10 +2707,16 @@ function BotChannelTab(props) {
     void startLogin(selected);
   };
   const pollStatus = async () => {
+    if (loginPollInFlight.current) return;
+    loginPollInFlight.current = true;
     try {
       const response = await fetch("/im-channel/login/status");
       const body = await response.json();
-      if (!body.ok || body.session === null) return;
+      if (!body.ok) return;
+      if (body.session === null) {
+        stopLoginPolling();
+        return;
+      }
       setLogin(body.session);
       if (body.session.status === "confirmed") {
         stopLoginPolling();
@@ -2697,6 +2726,8 @@ function BotChannelTab(props) {
         stopLoginPolling();
       }
     } catch {
+    } finally {
+      loginPollInFlight.current = false;
     }
   };
   const cards = [

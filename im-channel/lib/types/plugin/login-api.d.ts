@@ -14,6 +14,14 @@ export declare class LoginApi {
     private session;
     /** 企业微信扫码创建会话（scode），start 时建立、status 轮询消费。 */
     private wecomQr;
+    /**
+     * 企业微信扫码轮询协调器：同一 scode 的并发轮询共享一次外部请求
+     * （single-flight），2.5s 内的重复轮询直接回缓存。企微外部接口 10s 超时，
+     * 若无折叠，客户端 1.5~3s 一轮的轮询在外部服务变慢时会堆积并占满浏览器
+     * 每主机 6 连接，拖死整个设置页；折叠后外部调用量上界 = 每客户端轮询
+     * 间隔至多一次，与并发数无关。
+     */
+    private readonly wecomQrPolls;
     constructor(ctx: Context);
     /** Register the /im-channel/login/* routes on the web server. */
     register(): void;

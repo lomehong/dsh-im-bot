@@ -42,14 +42,21 @@ const linkStyle: React.CSSProperties = {
   fontSize: '13px',
 }
 
-interface QrStartPayload { ok: boolean; qrUrl?: string; scode?: string; pollIntervalMs?: number; error?: string }
+interface QrStartPayload { ok: boolean; qrUrl?: string; scode?: string; expiresAt?: number; pollIntervalMs?: number; error?: string }
 interface QrStatusPayload { ok: boolean; status?: 'waiting' | 'confirmed' | 'expired' | 'failed'; error?: string }
+
+/** 与主机侧 qr-auth 的 QR_TTL_MS 一致的兜底值（start 响应缺失 expiresAt 时用）。 */
+const QR_TTL_FALLBACK_MS = 5 * 60_000
 
 export function WecomConfigPanel({ onConfigured, onError }: WecomConfigPanelProps) {
   const [qrUrl, setQrUrl] = useState<string | undefined>(undefined)
   const [polling, setPolling] = useState(false)
   const [showManual, setShowManual] = useState(false)
   const scodeRef = useRef<string | undefined>(undefined)
+  const expiresAtRef = useRef<number | undefined>(undefined)
+  // 在途守卫：上一轮 status 请求未返回（外部服务变慢时一次能挂 10s）就跳过
+  // 本轮 tick，避免请求越堆越多占满浏览器连接池、拖死整个设置页。
+  const pollInFlightRef = useRef(false)
   const timerRef = useRef<number | undefined>(undefined)
 
   const stopPolling = useCallback((): void => {
@@ -71,6 +78,7 @@ export function WecomConfigPanel({ onConfigured, onError }: WecomConfigPanelProp
         return
       }
       scodeRef.current = data.scode
+      expiresAtRef.current = data.expiresAt ?? (Date.now() + QR_TTL_FALLBACK_MS)
       setQrUrl(data.qrUrl)
       setPolling(true)
       const interval = Math.max(2000, data.pollIntervalMs ?? 3000)
@@ -84,7 +92,15 @@ export function WecomConfigPanel({ onConfigured, onError }: WecomConfigPanelProp
   const pollQr = useCallback(async (): Promise<void> => {
     const scode = scodeRef.current
     if (scode === undefined) return
+    if (pollInFlightRef.current) return
+    pollInFlightRef.current = true
     try {
+      // 二维码 TTL 已过：停轮询并提示重新生成，不再空转请求。
+      if (expiresAtRef.current !== undefined && Date.now() > expiresAtRef.current) {
+        stopPolling()
+        onError('二维码已过期，请重新生成')
+        return
+      }
       const resp = await fetch(`/im-channel/wecom/qr/status?scode=${encodeURIComponent(scode)}`)
       const data = await resp.json() as QrStatusPayload
       if (data.ok && data.status === 'confirmed') {
@@ -92,14 +108,20 @@ export function WecomConfigPanel({ onConfigured, onError }: WecomConfigPanelProp
         onConfigured()
         return
       }
-      if (data.ok && (data.status === 'expired' || data.status === 'failed')) {
+      if (data.ok && data.status === 'expired') {
         stopPolling()
-        onError('扫码已过期或失败，请点击二维码重试，或使用手动配置。')
+        onError('二维码已过期，请重新生成')
+      }
+      if (data.ok && data.status === 'failed') {
+        stopPolling()
+        onError('扫码失败，请点击二维码重试，或使用手动配置。')
       }
     } catch {
       // 网络抖动：下一轮轮询继续。
+    } finally {
+      pollInFlightRef.current = false
     }
-  }, [stopPolling, onConfigured])
+  }, [stopPolling, onConfigured, onError])
 
   useEffect(() => {
     return () => {

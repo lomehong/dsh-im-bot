@@ -1,7 +1,7 @@
 {
   "name": "@dsh-extra/dsh-client-ui-settings-im",
   "description": "手机连接 settings tab: scan-code login and binding management for the im-channel plugin (WeChat / Feishu)",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
