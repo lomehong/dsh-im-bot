@@ -12,7 +12,7 @@
  * setSource-once 契约（若上游语义变化，此处会第一时间暴露）。
  */
 import { Context } from '@deepseek-ai/cordis'
-import Settings, { installSettingsSection } from '@deepseek-ai/dsh-settings'
+import Settings from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { describe, expect, it } from 'vitest'
 import { createSectionView } from '../src/plugin/section-view.ts'
@@ -44,29 +44,30 @@ describe('SectionView against real dsh-settings semantics', () => {
     let seenOnChange: TestSection | undefined
 
     const ctx = new Context({})
-    let service: MemorySettings | undefined
-    ctx.plugin({
-      name: 'test:memory-settings',
-      apply(inner) {
-        service = new MemorySettings(inner)
-      },
-    })
+    // Provider 经 ctx.plugin 注册为 cordis 服务（`ctx.settings`），consumer 的
+    // inject(['settings']) 才能触发；直接 new MemorySettings 不会注册服务。
+    await ctx.plugin(MemorySettings)
+    const service = ctx.settings as unknown as MemorySettings
     ctx.plugin({
       name: 'test:consumer',
       apply(consumerCtx) {
-        installSettingsSection(consumerCtx, 'test.section-view', Schema as unknown as z<TestSection>, entry, {
-          setSource: (source) => {
-            setSourceCalls++
-            view.adopt(source)
-          },
-          onChange: () => {
-            // 与插件 rebuildRouter 相同的读取方式：进入回调时惰性求值。
-            seenOnChange = view.read()
-          },
+        // alpha.2 起模块级 installSettingsSection() 移除：经 inject(['settings'])
+        // 取提供方，调用 SettingsProvider.installSection()（hooks 形状不变）。
+        consumerCtx.inject(['settings'], (sctx) => {
+          sctx.settings.installSection(consumerCtx, 'test-section-view', Schema as unknown as z<TestSection>, entry, {
+            setSource: (source) => {
+              setSourceCalls++
+              view.adopt(source)
+            },
+            onChange: () => {
+              // 与插件 rebuildRouter 相同的读取方式：进入回调时惰性求值。
+              seenOnChange = view.read()
+            },
+          })
         })
       },
     })
-    // installSettingsSection 的 inject 回调走微任务；排空后 source 已 adopt。
+    // installSection 经 inject 回调走微任务；排空后 source 已 adopt。
     await flushWatchers()
 
     // 注册即解析：未变更前读到的是组合基线。
@@ -76,7 +77,7 @@ describe('SectionView against real dsh-settings semantics', () => {
 
     // 运行期变更（等价于设置页保存）：publish → commit——deepEqual 不等
     // → 换引用 → 通知 watcher → onChange。
-    service!.publish({ 'test.section-view': { greeting: 'changed-at-runtime' } })
+    service!.publish({ 'test-section-view': { greeting: 'changed-at-runtime' } })
     await flushWatchers()
 
     // ① setSource 仍只调用过一次——契约固定（变更不重发 source）。
@@ -88,7 +89,7 @@ describe('SectionView against real dsh-settings semantics', () => {
     expect(view.read().greeting).toBe('changed-at-runtime')
 
     // 再变更一次，确认视图持续跟随（非一次性）。
-    service!.publish({ 'test.section-view': { greeting: 'changed-again' } })
+    service!.publish({ 'test-section-view': { greeting: 'changed-again' } })
     await flushWatchers()
     expect(view.read().greeting).toBe('changed-again')
     expect(seenOnChange?.greeting).toBe('changed-again')

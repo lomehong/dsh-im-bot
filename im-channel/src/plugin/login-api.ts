@@ -9,7 +9,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the webServer Context merge declared by dsh-host-webserver.
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+// 纯类型导入：载入 @deepseek-ai/dsh-settings 对 Context 的 `.settings` 增补。
+import type {} from '@deepseek-ai/dsh-settings'
 import { QrPollCoordinator } from './qr-poll-coordinator.ts'
 
 type LoginKind = 'wechat' | 'feishu' | 'wecom'
@@ -21,7 +22,7 @@ const KIND_LABELS: Record<LoginKind, string> = {
   wecom: '企业微信',
 }
 
-const NS = settingsNamespace('im-channel')
+const NS = 'im-channel'
 
 /** Session record the platform login bridges write the QR URL onto. */
 export interface QrLoginBridge {

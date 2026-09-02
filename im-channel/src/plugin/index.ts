@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+// 纯类型导入：载入 @deepseek-ai/dsh-settings 对 Context 的 `.settings` 增补。
+import type {} from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { BindStore } from '../core/bind-store.ts'
 import { Router, type RouterStatus } from '../core/router.ts'
@@ -21,7 +22,8 @@ export const name = 'im-channel'
 export const inject = ['agents', 'tools']
 export const provide = ['im-channel']
 
-const NS = settingsNamespace('im-channel')
+// alpha.2 起 settingsNamespace() 移除：裸字面量由 SettingsNamespaceInput 约束。
+const NS = 'im-channel'
 
 /** One user-declared channel instance; key in the dict is the instance name. */
 export interface ChannelInstanceConfig {
@@ -372,24 +374,29 @@ export function apply(ctx: Context, config: ImChannelSection): void {
       disposeRouter = () => { void owned.stop(); router = undefined }
   }
 
-  installSettingsSection(ctx, NS, Config, config, {
-    setSource: (source) => { section.adopt(source) },
-    onChange: () => {
-      // Reconcile the live router against the declared instances: a changed
-      // set, kind, or enabled flag restarts the router wholesale — channel
-      // connections are cheap to re-establish relative to config edits.
-      const next = section.read()
-      // A platform with saved credentials but no declared instance (e.g.
-      // credentials persisted before this reconciliation existed, or settings
-      // storage was reset) gets an auto-created instance so the bot actually
-      // comes online after login. The settings service is optional at the
-      // composition level, so reach it through a scoped inject.
-      ctx.inject(['settings'], sctx => {
-        void ensureInstancesForCredentials(sctx, next).catch(() => {})
-      })
-      if (router !== undefined && sameTopology(router, next)) return
-      rebuildRouter()
-    },
+  // alpha.2 起模块级 installSettingsSection() 移除：经 inject(['settings'])
+  // 取提供方，调用 SettingsProvider.installSection()（hooks 形状不变，
+  // 参考 dsh-yuyi/dsh-agent-default-model 的同等迁移）。
+  ctx.inject(['settings'], (sctx) => {
+    sctx.settings.installSection(ctx, NS, Config, config, {
+      setSource: (source) => { section.adopt(source) },
+      onChange: () => {
+        // Reconcile the live router against the declared instances: a changed
+        // set, kind, or enabled flag restarts the router wholesale — channel
+        // connections are cheap to re-establish relative to config edits.
+        const next = section.read()
+        // A platform with saved credentials but no declared instance (e.g.
+        // credentials persisted before this reconciliation existed, or settings
+        // storage was reset) gets an auto-created instance so the bot actually
+        // comes online after login. The settings service is optional at the
+        // composition level, so reach it through a scoped inject.
+        ctx.inject(['settings'], sctx => {
+          void ensureInstancesForCredentials(sctx, next).catch(() => {})
+        })
+        if (router !== undefined && sameTopology(router, next)) return
+        rebuildRouter()
+      },
+    })
   })
 }
 

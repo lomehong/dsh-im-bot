@@ -7,7 +7,9 @@
  * 便于按前缀做访客权限白名单（如 `mcp__wecom*` 放行整个命名空间）。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { JsonValue } from '@deepseek-ai/dsh-session'
+// alpha.3 起 JsonValue 从 @deepseek-ai/dsh-session 迁到 @deepseek-ai/dsh-util-values。
+// 早期 dsh-session 透传过 JsonValue，新版本断开了——这里直取下层 util-values 包避免版本耦合。
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { getEnabledMcpServers, serverEntryToConfig } from '../mcp-server-manager.ts'
 import { McpManager, type McpClient, type McpServerConfig, type McpTool } from './mcp-client.ts'
 import { publicMcpToolName } from './mcp-tool-name.ts'

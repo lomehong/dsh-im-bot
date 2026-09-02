@@ -4,7 +4,6 @@
  * image renders in the browser from the URL the platform returns; the host
  * only brokers the credential exchange.
  */
-import { settingsNamespace } from '@deepseek-ai/dsh-settings';
 import { QrPollCoordinator } from "./qr-poll-coordinator.js";
 const KINDS = ['wechat', 'feishu', 'wecom'];
 const KIND_LABELS = {
@@ -12,7 +11,7 @@ const KIND_LABELS = {
     feishu: '飞书',
     wecom: '企业微信',
 };
-const NS = settingsNamespace('im-channel');
+const NS = 'im-channel';
 const SESSION_TTL_MS = 8 * 60_000;
 export class LoginApi {
     ctx;
