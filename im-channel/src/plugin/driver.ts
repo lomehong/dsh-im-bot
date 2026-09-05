@@ -81,6 +81,8 @@ export class HarnessDriver implements AgentDriver {
 
   private static nextInstanceId = 0
   private readonly instanceId = ++HarnessDriver.nextInstanceId
+  /** masking 缺席只告警一次（宪章 §3.2 显式降级，不刷屏）。 */
+  private warnedNoMasking = false
 
   constructor(
     private readonly ctx: Context,
@@ -392,11 +394,18 @@ export class HarnessDriver implements AgentDriver {
 
   /**
    * P0 安全：外发 IM 前的敏感信息脱敏（masking 服务存在时）。流式视图与
-   * 终稿统一走这里；服务不可用时原样返回。
+   * 终稿统一走这里；服务不可用时原样返回——降级不静默：仅首次缺失时
+   * WARN 一次（宪章 §3.2 显式降级），通常意味着 dsh-redact 未安装。
    */
   private maskOutgoing(text: string): string {
     const masking = this.ctx.get('masking') as MaskingLike | undefined
-    if (masking?.maskTextSync === undefined || text.length === 0) return text
+    if (masking?.maskTextSync === undefined || text.length === 0) {
+      if (masking?.maskTextSync === undefined && text.length > 0 && !this.warnedNoMasking) {
+        this.warnedNoMasking = true
+        this.ctx.logger?.warn?.('[im-channel] masking 服务未安装（dsh-redact 缺席）：出站消息不做脱敏')
+      }
+      return text
+    }
     try {
       return masking.maskTextSync(text).text
     } catch {

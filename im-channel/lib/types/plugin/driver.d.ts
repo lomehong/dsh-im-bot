@@ -27,6 +27,8 @@ export declare class HarnessDriver implements AgentDriver {
     private readonly backgroundBuffer;
     private static nextInstanceId;
     private readonly instanceId;
+    /** masking 缺席只告警一次（宪章 §3.2 显式降级，不刷屏）。 */
+    private warnedNoMasking;
     constructor(ctx: Context, options?: {
         cwd?: string;
         agentOptions?: AgentOptions;
@@ -73,7 +75,8 @@ export declare class HarnessDriver implements AgentDriver {
     private actorOfAgent;
     /**
      * P0 安全：外发 IM 前的敏感信息脱敏（masking 服务存在时）。流式视图与
-     * 终稿统一走这里；服务不可用时原样返回。
+     * 终稿统一走这里；服务不可用时原样返回——降级不静默：仅首次缺失时
+     * WARN 一次（宪章 §3.2 显式降级），通常意味着 dsh-redact 未安装。
      */
     private maskOutgoing;
     /** Token 用量快照（/状态 展示）；token-meter 服务缺席时返回 undefined。 */
