@@ -264,7 +264,6 @@ export class HarnessDriver implements AgentDriver {
         }
         // 注册共享记忆工具
         this.mountSharedMemory(agentCtx, options.userId, options.isMaster)
-        this.provisionActor(options.userId, options.isMaster)
         this.noteTwinActor(agentCtx, options.isMaster)
         this.mountAskUserTool(agentCtx, sessionId)
       },
@@ -350,7 +349,6 @@ export class HarnessDriver implements AgentDriver {
         }
         // 注入共享记忆（如果 dsh-memory 插件已加载）
         this.mountSharedMemory(agentCtx, userId, isMaster)
-        this.provisionActor(userId, isMaster)
         this.noteTwinActor(agentCtx, isMaster)
         this.mountAskUserTool(agentCtx, createOptions.sessionId)
       },
@@ -534,31 +532,6 @@ export class HarnessDriver implements AgentDriver {
       agent.inject(msg)
     } catch {
       // 注入失败时静默跳过，不影响正常流程
-    }
-  }
-
-  /**
-   * 可选身份增强（宪章第三阶段 P3-4）：dsh-actors 在场时顺带注册对话者实体
-   * ——主人 bindMaster 锚定、访客 provision（未注册一律按生人 fail-closed）。
-   * actors 缺席/失败静默跳过：身份基线仍由渠道 userId 自持（宪章 §3.4）。
-   */
-  private provisionActor(userId?: string, isMaster?: boolean): void {
-    if (userId === undefined || userId === '') return
-    try {
-      const actors = this.ctx.get('dsh-actors') as
-        | {
-          provision?: (channel: unknown, userId: unknown, display?: unknown) => unknown
-          bindMaster?: (channel: unknown, userId: unknown) => unknown
-        }
-        | undefined
-      if (actors === undefined || typeof actors.provision !== 'function') return
-      actors.provision('im', userId)
-      if (isMaster === true && typeof actors.bindMaster === 'function') {
-        actors.bindMaster('im', userId)
-        this.ctx.logger?.info?.('[im-channel] dsh-actors 已锚定主人实体')
-      }
-    } catch {
-      // 身份增强失败不影响会话；基线身份仍自持
     }
   }
 

@@ -109,12 +109,6 @@ export declare class HarnessDriver implements AgentDriver {
      */
     private injectMemoryContext;
     /**
-     * 可选身份增强（宪章第三阶段 P3-4）：dsh-actors 在场时顺带注册对话者实体
-     * ——主人 bindMaster 锚定、访客 provision（未注册一律按生人 fail-closed）。
-     * actors 缺席/失败静默跳过：身份基线仍由渠道 userId 自持（宪章 §3.4）。
-     */
-    private provisionActor;
-    /**
      * Steering: append instructions to the RUNNING turn without cancelling it
      * (contrast with prompt(), which interrupts first). False when idle — the
      * caller should tell the user to send a normal message instead.
