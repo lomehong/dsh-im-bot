@@ -7,6 +7,10 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
 // import: these tests call bind(), whose debounced flush must never touch
 // the developer's real ~/.dsh/im-channel/bindings.json.
 const guardHome = mkdtempSync(join(tmpdir(), 'im-channel-guest-'))
+// 同步隔离 DSH_HOME（宪章 G-02 同根因）：环境里若设了 DSH_HOME，store 路径
+// 会绕过 guardHome 直读真实 bindings（开发机数据泄入断言的根因）。
+const guardDshHome = mkdtempSync(join(tmpdir(), 'im-channel-guest-dsh-'))
+process.env.DSH_HOME = guardDshHome
 vi.mock('node:os', async importOriginal => {
   const actual = await importOriginal<typeof import('node:os')>()
   return { ...actual, homedir: () => guardHome }
@@ -16,10 +20,16 @@ import { DEFAULT_GUEST_COMMANDS, guestToolDenied, matchesToolPattern } from '../
 import { BindStore } from '../src/core/bind-store.ts'
 
 afterAll(() => {
+  delete process.env.DSH_HOME
   try {
     rmSync(guardHome, { recursive: true, force: true })
   } catch {
     // Windows file locks; the OS temp cleaner will take it.
+  }
+  try {
+    rmSync(guardDshHome, { recursive: true, force: true })
+  } catch {
+    // 同上
   }
 })
 describe('matchesToolPattern', () => {
@@ -88,7 +98,8 @@ describe('legacy owner migration', () => {
     const store = new FreshStore()
     expect(store.ownerFor('feishu')?.userId).toBe('ou_early')
     store.flushSync()
-    const persisted = JSON.parse(readFileSync(file, 'utf8')) as { bindings: Array<{ userId: string; isMaster?: boolean }> }
+    // 隔离后落盘位置是实例级新路径（$DSH_HOME/im-channel/bindings.json）
+    const persisted = JSON.parse(readFileSync(join(guardDshHome, 'im-channel', 'bindings.json'), 'utf8')) as { bindings: Array<{ userId: string; isMaster?: boolean }> }
     expect(persisted.bindings.find(r => r.userId === 'ou_early')?.isMaster).toBe(true)
     expect(persisted.bindings.find(r => r.userId === 'ou_late')?.isMaster).toBeUndefined()
   })
