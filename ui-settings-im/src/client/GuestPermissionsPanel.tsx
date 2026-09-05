@@ -12,6 +12,8 @@ interface PermissionsPayload {
   ok: boolean
   guestTools: string[]
   guestCommands: string[]
+  /** 按回合记忆装配（可选增强，默认关）：派发前注入相关共享记忆包 */
+  memoryAssemblePerTurn: boolean
   toolCatalog: ToolCatalogEntry[]
   commandCatalog: CommandCatalogEntry[]
   owners: Record<string, { bound: boolean; userId: string }>
@@ -23,6 +25,7 @@ export function GuestPermissionsPanel(): React.ReactElement {
   const [data, setData] = useState<PermissionsPayload | undefined>(undefined)
   const [tools, setTools] = useState<string[]>([])
   const [commands, setCommands] = useState<string[]>([])
+  const [assemble, setAssemble] = useState(false)
   const [custom, setCustom] = useState('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
@@ -35,6 +38,7 @@ export function GuestPermissionsPanel(): React.ReactElement {
         setData(payload)
         setTools(payload.guestTools)
         setCommands(payload.guestCommands)
+        setAssemble(payload.memoryAssemblePerTurn === true)
       } else {
         setMessage('读取访客权限失败')
       }
@@ -65,7 +69,7 @@ export function GuestPermissionsPanel(): React.ReactElement {
       const resp = await fetch('/im-channel/guest-permissions/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guestTools: tools, guestCommands: commands }),
+        body: JSON.stringify({ guestTools: tools, guestCommands: commands, memoryAssemblePerTurn: assemble }),
       })
       const payload = await resp.json() as { ok: boolean; error?: string }
       setMessage(payload.ok ? '✅ 已保存，下一轮对话即生效' : `保存失败：${payload.error ?? '未知错误'}`)
@@ -94,6 +98,18 @@ export function GuestPermissionsPanel(): React.ReactElement {
           访客共享 Owner 的会话上下文，但只能使用下方勾选的能力。保存后下一轮对话即生效。
         </p>
         <p style={{ margin: '0 0 12px', fontSize: '13px' }}>{ownerLine}</p>
+
+        <h4 style={{ margin: '0 0 8px' }}>按回合记忆装配（可选增强，需 dsh-memory）</h4>
+        <label style={{ display: 'block', marginBottom: '16px' }}>
+          <input
+            type="checkbox"
+            checked={assemble}
+            onChange={(e) => { setAssemble(e.target.checked) }}
+          />
+          <span style={{ marginLeft: '6px' }}>
+            开启后每条消息派发前，自动注入与消息内容相关的共享记忆包（dsh-memory 落审计回执；默认关闭）。
+          </span>
+        </label>
 
         <h4 style={{ margin: '0 0 8px' }}>访客可用命令</h4>
         <div style={{ marginBottom: '16px' }}>

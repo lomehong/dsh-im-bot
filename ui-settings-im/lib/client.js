@@ -83,7 +83,7 @@ if (typeof document !== "undefined") {
 }
 var BotChannelTab_default = { "section": "eiGEEq_section", "intro": "eiGEEq_intro", "cards": "eiGEEq_cards", "card": "eiGEEq_card", "cardIcon": "eiGEEq_cardIcon", "cardName": "eiGEEq_cardName", "cardCount": "eiGEEq_cardCount", "detail": "eiGEEq_detail", "qrPanel": "eiGEEq_qrPanel", "qrImage": "eiGEEq_qrImage", "qrClickArea": "eiGEEq_qrClickArea", "qrRefreshButton": "eiGEEq_qrRefreshButton", "qrRefreshHint": "eiGEEq_qrRefreshHint", "qrSpinner": "eiGEEq_qrSpinner", "qrSpinnerRing": "eiGEEq_qrSpinnerRing", "qrOk": "eiGEEq_qrOk", "qrError": "eiGEEq_qrError", "stepsPanel": "eiGEEq_stepsPanel", "stepsTitle": "eiGEEq_stepsTitle", "steps": "eiGEEq_steps", "step": "eiGEEq_step", "stepNumber": "eiGEEq_stepNumber", "stepBody": "eiGEEq_stepBody", "stepText": "eiGEEq_stepText", "stepNote": "eiGEEq_stepNote", "bindings": "eiGEEq_bindings", "bindingsTitle": "eiGEEq_bindingsTitle", "bindingsEmpty": "eiGEEq_bindingsEmpty", "bindingsTable": "eiGEEq_bindingsTable", "bindingKind": "eiGEEq_bindingKind", "bindingSession": "eiGEEq_bindingSession", "bindingRemove": "eiGEEq_bindingRemove", "passphraseCard": "eiGEEq_passphraseCard", "passphraseTitle": "eiGEEq_passphraseTitle", "passphraseHint": "eiGEEq_passphraseHint", "passphraseCommand": "eiGEEq_passphraseCommand" };
 
-// node_modules/.pnpm/qrcode-generator@2.0.4/node_modules/qrcode-generator/dist/qrcode.mjs
+// ../../node_modules/.pnpm/qrcode-generator@2.0.4/node_modules/qrcode-generator/dist/qrcode.mjs
 var qrcode = function(typeNumber, errorCorrectionLevel) {
   const PAD0 = 236;
   const PAD1 = 17;
@@ -96,7 +96,7 @@ var qrcode = function(typeNumber, errorCorrectionLevel) {
   const _this = {};
   const makeImpl = function(test, maskPattern) {
     _moduleCount = _typeNumber * 4 + 17;
-    _modules = function(moduleCount) {
+    _modules = (function(moduleCount) {
       const modules = new Array(moduleCount);
       for (let row = 0; row < moduleCount; row += 1) {
         modules[row] = new Array(moduleCount);
@@ -105,7 +105,7 @@ var qrcode = function(typeNumber, errorCorrectionLevel) {
         }
       }
       return modules;
-    }(_moduleCount);
+    })(_moduleCount);
     setupPositionProbePattern(0, 0);
     setupPositionProbePattern(_moduleCount - 7, 0);
     setupPositionProbePattern(0, _moduleCount - 7);
@@ -621,7 +621,7 @@ qrcode.stringToBytes = function(s) {
   return bytes;
 };
 qrcode.createStringToBytes = function(unicodeData, numChars) {
-  const unicodeMap = function() {
+  const unicodeMap = (function() {
     const bin = base64DecodeInputStream(unicodeData);
     const read = function() {
       const b = bin.read();
@@ -645,7 +645,7 @@ qrcode.createStringToBytes = function(unicodeData, numChars) {
       throw count + " != " + numChars;
     }
     return unicodeMap2;
-  }();
+  })();
   const unknownChar = "?".charCodeAt(0);
   return function(s) {
     const bytes = [];
@@ -692,7 +692,7 @@ var QRMaskPattern = {
   PATTERN110: 6,
   PATTERN111: 7
 };
-var QRUtil = function() {
+var QRUtil = (function() {
   const PATTERN_POSITION_TABLE = [
     [],
     [6, 18],
@@ -921,8 +921,8 @@ var QRUtil = function() {
     return lostPoint;
   };
   return _this;
-}();
-var QRMath = function() {
+})();
+var QRMath = (function() {
   const EXP_TABLE = new Array(256);
   const LOG_TABLE = new Array(256);
   for (let i = 0; i < 8; i += 1) {
@@ -951,12 +951,12 @@ var QRMath = function() {
     return EXP_TABLE[n];
   };
   return _this;
-}();
+})();
 var qrPolynomial = function(num, shift) {
   if (typeof num.length == "undefined") {
     throw num.length + "/" + shift;
   }
-  const _num = function() {
+  const _num = (function() {
     let offset = 0;
     while (offset < num.length && num[offset] == 0) {
       offset += 1;
@@ -966,7 +966,7 @@ var qrPolynomial = function(num, shift) {
       _num2[i] = num[i + offset];
     }
     return _num2;
-  }();
+  })();
   const _this = {};
   _this.getAt = function(index) {
     return _num[index];
@@ -999,7 +999,7 @@ var qrPolynomial = function(num, shift) {
   };
   return _this;
 };
-var QRRSBlock = function() {
+var QRRSBlock = (function() {
   const RS_BLOCK_TABLE = [
     // L
     // M
@@ -1245,7 +1245,7 @@ var QRRSBlock = function() {
     return list;
   };
   return _this;
-}();
+})();
 var qrBitBuffer = function() {
   const _buffer = [];
   let _length = 0;
@@ -1395,12 +1395,12 @@ var qrKanji = function(data) {
   const _mode = QRMode.MODE_KANJI;
   const _data = data;
   const stringToBytes2 = qrcode.stringToBytes;
-  !function(c, code) {
+  !(function(c, code) {
     const test = stringToBytes2(c);
     if (test.length != 2 || (test[0] << 8 | test[1]) != code) {
       throw "sjis not supported.";
     }
-  }("\u53CB", 38726);
+  })("\u53CB", 38726);
   const _bytes = stringToBytes2(data);
   const _this = {};
   _this.getMode = function() {
@@ -2412,6 +2412,7 @@ function GuestPermissionsPanel() {
   const [data, setData] = (0, import_react3.useState)(void 0);
   const [tools, setTools] = (0, import_react3.useState)([]);
   const [commands, setCommands] = (0, import_react3.useState)([]);
+  const [assemble, setAssemble] = (0, import_react3.useState)(false);
   const [custom, setCustom] = (0, import_react3.useState)("");
   const [saving, setSaving] = (0, import_react3.useState)(false);
   const [message, setMessage] = (0, import_react3.useState)("");
@@ -2423,6 +2424,7 @@ function GuestPermissionsPanel() {
         setData(payload);
         setTools(payload.guestTools);
         setCommands(payload.guestCommands);
+        setAssemble(payload.memoryAssemblePerTurn === true);
       } else {
         setMessage("\u8BFB\u53D6\u8BBF\u5BA2\u6743\u9650\u5931\u8D25");
       }
@@ -2449,7 +2451,7 @@ function GuestPermissionsPanel() {
       const resp = await fetch("/im-channel/guest-permissions/update", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ guestTools: tools, guestCommands: commands })
+        body: JSON.stringify({ guestTools: tools, guestCommands: commands, memoryAssemblePerTurn: assemble })
       });
       const payload = await resp.json();
       setMessage(payload.ok ? "\u2705 \u5DF2\u4FDD\u5B58\uFF0C\u4E0B\u4E00\u8F6E\u5BF9\u8BDD\u5373\u751F\u6548" : `\u4FDD\u5B58\u5931\u8D25\uFF1A${payload.error ?? "\u672A\u77E5\u9519\u8BEF"}`);
@@ -2468,6 +2470,20 @@ function GuestPermissionsPanel() {
     /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("h3", { style: { margin: "0 0 4px" }, children: "\u{1F6E1} \u8BBF\u5BA2\u6743\u9650" }),
     /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { style: { margin: "0 0 12px", fontSize: "13px", color: "#666" }, children: "\u6570\u5B57\u5206\u8EAB\u6A21\u5F0F\uFF1A\u53EA\u6709 Owner \u9700\u8981 /bind\uFF0C\u5176\u4ED6\u6240\u6709\u4EBA\u4F5C\u4E3A\u8BBF\u5BA2\u76F4\u63A5\u5BF9\u8BDD\u3002 \u8BBF\u5BA2\u5171\u4EAB Owner \u7684\u4F1A\u8BDD\u4E0A\u4E0B\u6587\uFF0C\u4F46\u53EA\u80FD\u4F7F\u7528\u4E0B\u65B9\u52FE\u9009\u7684\u80FD\u529B\u3002\u4FDD\u5B58\u540E\u4E0B\u4E00\u8F6E\u5BF9\u8BDD\u5373\u751F\u6548\u3002" }),
     /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { style: { margin: "0 0 12px", fontSize: "13px" }, children: ownerLine }),
+    /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("h4", { style: { margin: "0 0 8px" }, children: "\u6309\u56DE\u5408\u8BB0\u5FC6\u88C5\u914D\uFF08\u53EF\u9009\u589E\u5F3A\uFF0C\u9700 dsh-memory\uFF09" }),
+    /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { style: { display: "block", marginBottom: "16px" }, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+        "input",
+        {
+          type: "checkbox",
+          checked: assemble,
+          onChange: (e) => {
+            setAssemble(e.target.checked);
+          }
+        }
+      ),
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { style: { marginLeft: "6px" }, children: "\u5F00\u542F\u540E\u6BCF\u6761\u6D88\u606F\u6D3E\u53D1\u524D\uFF0C\u81EA\u52A8\u6CE8\u5165\u4E0E\u6D88\u606F\u5185\u5BB9\u76F8\u5173\u7684\u5171\u4EAB\u8BB0\u5FC6\u5305\uFF08dsh-memory \u843D\u5BA1\u8BA1\u56DE\u6267\uFF1B\u9ED8\u8BA4\u5173\u95ED\uFF09\u3002" })
+    ] }),
     /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("h4", { style: { margin: "0 0 8px" }, children: "\u8BBF\u5BA2\u53EF\u7528\u547D\u4EE4" }),
     /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { style: { marginBottom: "16px" }, children: (data.commandCatalog ?? []).map((entry) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { style: { display: "block", marginBottom: "4px" }, children: [
       /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(

@@ -186,6 +186,7 @@ export class LoginApi {
           ok: true,
           guestTools: section.guestTools ?? [],
           guestCommands: section.guestCommands ?? [...DEFAULT_GUEST_COMMANDS],
+          memoryAssemblePerTurn: section.memoryAssemblePerTurn === true,
           toolCatalog: GUEST_TOOL_CATALOG,
           commandCatalog: GUEST_COMMAND_CATALOG,
           owners,
@@ -199,10 +200,11 @@ export class LoginApi {
   /** POST /im-channel/guest-permissions/update：保存访客工具/命令白名单。 */
   private async handleGuestPermissionsUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
-      const body = await readJsonBody(req) as { guestTools?: unknown; guestCommands?: unknown }
-      const patch: { guestTools?: string[]; guestCommands?: string[] } = {}
+      const body = await readJsonBody(req) as { guestTools?: unknown; guestCommands?: unknown; memoryAssemblePerTurn?: unknown }
+      const patch: { guestTools?: string[]; guestCommands?: string[]; memoryAssemblePerTurn?: boolean } = {}
       if (Array.isArray(body.guestTools)) patch.guestTools = body.guestTools.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
       if (Array.isArray(body.guestCommands)) patch.guestCommands = body.guestCommands.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
+      if (typeof body.memoryAssemblePerTurn === 'boolean') patch.memoryAssemblePerTurn = body.memoryAssemblePerTurn
       if (Object.keys(patch).length === 0) {
         respondJson(res, 400, { ok: false, error: 'guestTools/guestCommands 至少提供一个有效数组' })
         return
@@ -252,10 +254,10 @@ export class LoginApi {
   }
 
   /** Read the im-channel settings section values this surface reports. */
-  private async readSettingsSection(): Promise<{ guestTools?: string[]; guestCommands?: string[] }> {
+  private async readSettingsSection(): Promise<{ guestTools?: string[]; guestCommands?: string[]; memoryAssemblePerTurn?: boolean }> {
     return await new Promise(resolve => {
       this.ctx.inject(['settings'], sctx => {
-        const section = sctx.settings.get(NS) as { guestTools?: string[]; guestCommands?: string[] } | undefined
+        const section = sctx.settings.get(NS) as { guestTools?: string[]; guestCommands?: string[]; memoryAssemblePerTurn?: boolean } | undefined
         resolve(section ?? {})
       })
     })

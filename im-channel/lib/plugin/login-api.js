@@ -159,6 +159,7 @@ export class LoginApi {
                     ok: true,
                     guestTools: section.guestTools ?? [],
                     guestCommands: section.guestCommands ?? [...DEFAULT_GUEST_COMMANDS],
+                    memoryAssemblePerTurn: section.memoryAssemblePerTurn === true,
                     toolCatalog: GUEST_TOOL_CATALOG,
                     commandCatalog: GUEST_COMMAND_CATALOG,
                     owners,
@@ -178,6 +179,8 @@ export class LoginApi {
                 patch.guestTools = body.guestTools.filter((v) => typeof v === 'string' && v.trim().length > 0).map(v => v.trim());
             if (Array.isArray(body.guestCommands))
                 patch.guestCommands = body.guestCommands.filter((v) => typeof v === 'string' && v.trim().length > 0).map(v => v.trim());
+            if (typeof body.memoryAssemblePerTurn === 'boolean')
+                patch.memoryAssemblePerTurn = body.memoryAssemblePerTurn;
             if (Object.keys(patch).length === 0) {
                 respondJson(res, 400, { ok: false, error: 'guestTools/guestCommands 至少提供一个有效数组' });
                 return;
