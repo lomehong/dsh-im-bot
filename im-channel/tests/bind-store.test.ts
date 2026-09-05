@@ -4,7 +4,11 @@ import { join } from 'node:path'
 import { afterEach, afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Redirect the store file into a per-test temp HOME before the module loads.
+// 同时隔离 DSH_HOME（bind-store 现按 宪章 §3.3 优先读 $DSH_HOME）——
+// 不隔离会把开发机真实 bindings 经 legacy 回退迁移吃进断言（G-02）。
 const tempHome = mkdtempSync(join(tmpdir(), 'im-channel-bind-'))
+const tempDshHome = mkdtempSync(join(tmpdir(), 'im-channel-dsh-'))
+process.env.DSH_HOME = tempDshHome
 vi.mock('node:os', async importOriginal => {
   const actual = await importOriginal<typeof import('node:os')>()
   return { ...actual, homedir: () => tempHome }
@@ -26,10 +30,16 @@ afterEach(() => {
 })
 
 afterAll(() => {
+  delete process.env.DSH_HOME
   try {
     rmSync(tempHome, { recursive: true, force: true })
   } catch {
     // Windows file locks; the OS temp cleaner will take it.
+  }
+  try {
+    rmSync(tempDshHome, { recursive: true, force: true })
+  } catch {
+    // 同上
   }
 })
 
@@ -80,8 +90,8 @@ describe('BindStore', () => {
     expect(removeBinding({ sessionId: 'session-shared' })).toBe(true)
     expect(listBindings().some(r => r.sessionId === 'session-shared')).toBe(false)
     BindStore.shared.flushSync()
-    expect(existsSync(join(tempHome, '.dsh', 'im-channel', 'bindings.json'))).toBe(true)
-    const raw = JSON.parse(readFileSync(join(tempHome, '.dsh', 'im-channel', 'bindings.json'), 'utf8')) as { bindings: Array<{ sessionId: string }> }
+    expect(existsSync(join(tempDshHome, 'im-channel', 'bindings.json'))).toBe(true)
+    const raw = JSON.parse(readFileSync(join(tempDshHome, 'im-channel', 'bindings.json'), 'utf8')) as { bindings: Array<{ sessionId: string }> }
     expect(raw.bindings.some(r => r.sessionId === 'session-shared')).toBe(false)
   })
 })

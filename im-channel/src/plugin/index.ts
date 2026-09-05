@@ -294,6 +294,31 @@ export function apply(ctx: Context, config: ImChannelSection): void {
         driver,
         store,
         config: { commandPrefix: next.commandPrefix },
+        // 可选身份增强（宪章第三阶段 P3-4）：dsh-actors 在场时顺带注册实体——
+        // 主人 bindMaster 锚定（冲突 WARN 不静默）、访客 provision 为生人；
+        // 缺席/失败静默跳过，绑定权威仍在 bind-store（宪章 §3.4）。
+        onActorsBind: (channel, userId, isMaster) => {
+          try {
+            const actors = (ctx as unknown as { get(name: string): unknown }).get('dsh-actors') as
+              | {
+                provision?: (channel: unknown, userId: unknown, display?: unknown) => unknown
+                bindMaster?: (channel: unknown, userId: unknown) => { ok?: boolean; error?: string } | undefined
+              }
+              | undefined
+            if (actors === undefined || typeof actors.provision !== 'function') return
+            actors.provision(channel, userId)
+            if (isMaster && typeof actors.bindMaster === 'function') {
+              const r = actors.bindMaster(channel, userId)
+              if (r !== undefined && r !== null && r.ok === false) {
+                ctx.logger?.warn?.(`[im-channel] dsh-actors 主人锚定冲突：${r.error ?? '未知原因'}（绑定权威仍以 bind-store 为准）`)
+              } else {
+                ctx.logger?.info?.('[im-channel] dsh-actors 主人实体已锚定')
+              }
+            }
+          } catch (e) {
+            ctx.logger?.warn?.('[im-channel] dsh-actors 注册失败（跳过）:', e instanceof Error ? e.message : String(e))
+          }
+        },
         log: (line: string): void => { ctx.logger.info(line) },
         allowed: (from): boolean => {
           const list = section.read().allowlist

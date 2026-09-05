@@ -124,6 +124,9 @@ export interface RouterDeps {
      * allowed. Rejected senders are ignored silently (no probe surface).
      */
     readonly allowed?: (from: InboundMessage['from']) => boolean;
+    /** 可选身份增强（宪章第三阶段 P3-4）：绑定落库后顺带在 dsh-actors 注册实体
+     *  （主人 bindMaster 锚定 / 访客 provision 为生人）。缺席或失败由实现方静默兜底。 */
+    readonly onActorsBind?: (channel: InboundMessage['from']['kind'], userId: string, isMaster: boolean) => void;
 }
 /** BindStore surface the router needs (subset of BindStore for testing). */
 export interface BindStoreLike {

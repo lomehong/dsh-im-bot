@@ -121,6 +121,9 @@ export interface RouterDeps {
    * allowed. Rejected senders are ignored silently (no probe surface).
    */
   readonly allowed?: (from: InboundMessage['from']) => boolean
+  /** 可选身份增强（宪章第三阶段 P3-4）：绑定落库后顺带在 dsh-actors 注册实体
+   *  （主人 bindMaster 锚定 / 访客 provision 为生人）。缺席或失败由实现方静默兜底。 */
+  readonly onActorsBind?: (channel: InboundMessage['from']['kind'], userId: string, isMaster: boolean) => void
 }
 
 /** BindStore surface the router needs (subset of BindStore for testing). */
@@ -315,6 +318,7 @@ export class Router {
           // 首次对话，创建新会话
           guestSessionId = await this.startUserSession(message.from)
           this.deps.store.bind(message.from, guestSessionId, false)
+          this.deps.onActorsBind?.(message.from.kind, message.from.userId, false)
           this.log(`[im-channel] 访客 ${message.from.userId.slice(0, 12)}… 创建独立会话 ${guestSessionId.slice(0, 8)}…`)
         }
         await this.promptSession(channel, target, message, guestSessionId, false, message.from.userId)
@@ -351,6 +355,7 @@ export class Router {
         this.log(`[im-channel] 分身会话 ${sessionId.slice(0, 8)}… 重连失败，重建: ${messageOf(error)}`)
         const newSessionId = await this.startUserSession(ownerRef)
         this.deps.store.bind(ownerRef, newSessionId, true)
+        this.deps.onActorsBind?.(ownerRef.kind, ownerRef.userId, true)
         sessionId = newSessionId
       }
     }
@@ -378,6 +383,7 @@ export class Router {
         this.log(`[im-channel] 访客会话 ${sessionId.slice(0, 8)}… 重连失败，重建: ${messageOf(error)}`)
         const newSessionId = await this.startUserSession(message.from)
         this.deps.store.bind(message.from, newSessionId, false)
+        this.deps.onActorsBind?.(message.from.kind, message.from.userId, _isMaster)
         sessionId = newSessionId
       }
     }
@@ -453,6 +459,7 @@ export class Router {
       if (this.deps.store.sessionIdFor(message.from) === undefined) {
         const guestSessionId = await this.startUserSession(message.from)
         this.deps.store.bind(message.from, guestSessionId, false)
+        this.deps.onActorsBind?.(message.from.kind, message.from.userId, false)
         this.deps.store.rememberTarget?.(message.from, target.targetId)
       }
     }
@@ -461,6 +468,7 @@ export class Router {
         // 认领本渠道的数字分身：创建 Owner 会话并成为唯一管理者。
         const sessionId = await this.startUserSession(message.from)
         this.deps.store.bind(message.from, sessionId, true)
+        this.deps.onActorsBind?.(message.from.kind, message.from.userId, true)
         this.deps.store.rememberTarget?.(message.from, target.targetId)
         const workspace = this.deps.store.workspaceFor?.(message.from)
         const lead = workspace === undefined
@@ -506,6 +514,7 @@ export class Router {
         }
         const sessionId = await this.startUserSession(message.from)
         this.deps.store.bind(message.from, sessionId)
+        this.deps.onActorsBind?.(message.from.kind, message.from.userId, false)
         await this.safeSend(channel, target, { text: `🆕 已开始新会话 ${sessionId.slice(0, 8)}…。上下文已清空，直接发消息开始新任务。` })
         return
       }
@@ -616,6 +625,7 @@ export class Router {
         this.deps.store.selectWorkspace?.(message.from, picked.path)
         const sessionId = await this.deps.driver.startSession({ cwd: picked.path })
         this.deps.store.bind(message.from, sessionId)
+        this.deps.onActorsBind?.(message.from.kind, message.from.userId, false)
         await this.safeSend(channel, target, { text: `✅ 已切换项目：${picked.title || picked.path}\n🆕 新线程已开启，直接发消息开始。` })
         return
       }
