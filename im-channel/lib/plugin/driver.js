@@ -31,10 +31,13 @@ export class HarnessDriver {
     instanceId = ++HarnessDriver.nextInstanceId;
     /** masking 缺席只告警一次（宪章 §3.2 显式降级，不刷屏）。 */
     warnedNoMasking = false;
+    memoryAssemblePerTurn;
     constructor(ctx, options = {}) {
         this.ctx = ctx;
         this.options = options;
         this.agents = ctx.agents;
+        if (options.memoryAssemblePerTurn !== undefined)
+            this.memoryAssemblePerTurn = options.memoryAssemblePerTurn;
         this.mcpRegistry = options.mcpRegistry;
         this.guestTools = options.guestTools ?? (() => []);
         this.approval = options.approval ?? (() => 'ask');
@@ -201,6 +204,7 @@ export class HarnessDriver {
                 }
                 // 注册共享记忆工具
                 this.mountSharedMemory(agentCtx, options.userId, options.isMaster);
+                this.provisionActor(options.userId, options.isMaster);
                 this.noteTwinActor(agentCtx, options.isMaster);
                 this.mountAskUserTool(agentCtx, sessionId);
             },
@@ -282,6 +286,7 @@ export class HarnessDriver {
                 }
                 // 注入共享记忆（如果 dsh-memory 插件已加载）
                 this.mountSharedMemory(agentCtx, userId, isMaster);
+                this.provisionActor(userId, isMaster);
                 this.noteTwinActor(agentCtx, isMaster);
                 this.mountAskUserTool(agentCtx, createOptions.sessionId);
             },
@@ -468,6 +473,28 @@ export class HarnessDriver {
         }
     }
     /**
+     * 可选身份增强（宪章第三阶段 P3-4）：dsh-actors 在场时顺带注册对话者实体
+     * ——主人 bindMaster 锚定、访客 provision（未注册一律按生人 fail-closed）。
+     * actors 缺席/失败静默跳过：身份基线仍由渠道 userId 自持（宪章 §3.4）。
+     */
+    provisionActor(userId, isMaster) {
+        if (userId === undefined || userId === '')
+            return;
+        try {
+            const actors = this.ctx.get('dsh-actors');
+            if (actors === undefined || typeof actors.provision !== 'function')
+                return;
+            actors.provision('im', userId);
+            if (isMaster === true && typeof actors.bindMaster === 'function') {
+                actors.bindMaster('im', userId);
+                this.ctx.logger?.info?.('[im-channel] dsh-actors 已锚定主人实体');
+            }
+        }
+        catch {
+            // 身份增强失败不影响会话；基线身份仍自持
+        }
+    }
+    /**
      * Steering: append instructions to the RUNNING turn without cancelling it
      * (contrast with prompt(), which interrupts first). False when idle — the
      * caller should tell the user to send a normal message instead.
@@ -574,6 +601,19 @@ export class HarnessDriver {
                 // followup queues in the inbox until the agent frees up.
                 this.endTurn(record, prior, { reply: renderFinal(prior.mode, prior.messages, prior.toolLines) });
             }
+        }
+        // 按回合记忆装配（可选增强，宪章第三阶段 P3-5；默认关）：
+        // 依消息文本检索相关记忆注入本轮上下文，dsh-memory 侧落审计回执。
+        // 装配失败绝不阻断消息派发。
+        if (this.memoryAssemblePerTurn?.() === true && text.trim() !== '') {
+            try {
+                const memory = this.ctx.get('dsh-memory');
+                const pack = memory?.assemblePack?.(options.userId ?? 'unknown', options.isMaster === true, text);
+                if (pack !== undefined && pack.text !== '') {
+                    record.agent.inject(createUserMessage({ content: [{ type: 'text', text: pack.text }], source: { kind: 'plugin', plugin: 'dsh-memory' } }));
+                }
+            }
+            catch { /* 装配失败：跳过本轮记忆注入 */ }
         }
         const mode = modeOf(options.verbosity);
         // 记录本轮发起者：工具守卫与审批按此归因（含 userId，审批卡片展示用）。

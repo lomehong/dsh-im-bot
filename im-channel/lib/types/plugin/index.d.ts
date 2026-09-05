@@ -14,6 +14,8 @@ export interface ChannelInstanceConfig {
 export interface ImChannelSection {
     channels: Record<string, ChannelInstanceConfig>;
     commandPrefix: string;
+    /** 按回合记忆装配（可选增强，默认关）：dsh-memory assemblePack 逐回合注入 */
+    memoryAssemblePerTurn?: boolean;
     /** Allowed IM user ids (or `kind:userId`); empty = everyone allowed. */
     allowlist: string[];
     /** 访客可用的工具模式列表（精确名或前缀通配 `foo*`）；空 = 访客纯对话。 */

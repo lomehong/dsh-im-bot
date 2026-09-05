@@ -1,13 +1,33 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+/** 实例家：DSH_HOME 优先，回退 ~/.dsh（与套件其他插件同一约定，宪章 §3.3）。 */
+function dshHome() {
+    return process.env.DSH_HOME ?? join(homedir(), '.dsh');
+}
 function storePath() {
+    return join(dshHome(), 'im-channel', 'bindings.json');
+}
+/** v3 前的机器级旧路径（跨实例共享绑定，违背一实例一分身）——只作迁移源与回退读。 */
+function legacyStorePath() {
     return join(homedir(), '.dsh', 'im-channel', 'bindings.json');
 }
 function readStore() {
     const path = storePath();
-    if (!existsSync(path))
-        return { bindings: [] };
+    if (!existsSync(path)) {
+        // 迁移回退：新位置缺文件而旧位置有 → 复制到实例家（旧文件保留作备份）
+        const legacy = legacyStorePath();
+        if (existsSync(legacy)) {
+            try {
+                mkdirSync(join(path, '..'), { recursive: true });
+                copyFileSync(legacy, path);
+            }
+            catch { /* 复制失败按空处理，写入侧会重建 */ }
+        }
+        else {
+            return { bindings: [] };
+        }
+    }
     return JSON.parse(readFileSync(path, 'utf8'));
 }
 function writeStore(store) {

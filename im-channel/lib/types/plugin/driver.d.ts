@@ -29,6 +29,7 @@ export declare class HarnessDriver implements AgentDriver {
     private readonly instanceId;
     /** masking 缺席只告警一次（宪章 §3.2 显式降级，不刷屏）。 */
     private warnedNoMasking;
+    private readonly memoryAssemblePerTurn?;
     constructor(ctx: Context, options?: {
         cwd?: string;
         agentOptions?: AgentOptions;
@@ -50,6 +51,9 @@ export declare class HarnessDriver implements AgentDriver {
         onBackgroundMessage?: (sessionId: string, text: string) => void;
         /** ask_user_question 的 IM 桥：agent 作用域遮蔽同名工具，问题推给绑定用户。 */
         onUserQuestion?: (sessionId: string, questions: QuestionItem[]) => Promise<QuestionAnswer>;
+        /** 按回合记忆装配开关（可选增强，默认关）：开启后每条用户消息派发前，
+         *  由 dsh-memory.assemblePack 注入相关记忆包（带审计回执）。 */
+        memoryAssemblePerTurn?: () => boolean;
     });
     startSession(options?: SessionOptions): Promise<string>;
     /** Whether this driver currently owns a live agent for the session id. */
@@ -104,6 +108,12 @@ export declare class HarnessDriver implements AgentDriver {
      * 使用 system 消息注入，在 agent 首次响应前提供记忆上下文。
      */
     private injectMemoryContext;
+    /**
+     * 可选身份增强（宪章第三阶段 P3-4）：dsh-actors 在场时顺带注册对话者实体
+     * ——主人 bindMaster 锚定、访客 provision（未注册一律按生人 fail-closed）。
+     * actors 缺席/失败静默跳过：身份基线仍由渠道 userId 自持（宪章 §3.4）。
+     */
+    private provisionActor;
     /**
      * Steering: append instructions to the RUNNING turn without cancelling it
      * (contrast with prompt(), which interrupts first). False when idle — the

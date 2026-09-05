@@ -27,6 +27,8 @@ const InstanceSchema = z.object({
 export const Config = z.object({
     channels: z.dict(InstanceSchema).default({}),
     commandPrefix: z.string().default('/'),
+    /** 按回合记忆装配（可选增强，默认关）：开启后每条用户消息派发前注入相关记忆包 */
+    memoryAssemblePerTurn: z.boolean().default(false),
     allowlist: z.array(z.string()).default([]),
     guestTools: z.array(z.string()).default([]),
     guestCommands: z.array(z.string()).default([...DEFAULT_GUEST_COMMANDS]),
@@ -199,6 +201,7 @@ export function apply(ctx, config) {
         mcpRegistry,
         guestTools: () => section.read().guestTools ?? [],
         agentPreset: () => section.read().agentPreset || undefined,
+        memoryAssemblePerTurn: () => section.read().memoryAssemblePerTurn === true,
         // 非本插件驱动轮次的产出（schedule 提醒、yuyi 唤醒、竞态尾巴）
         // 主动推送到该会话绑定用户的 IM——网页端看得到的，手机上也看得到。
         onBackgroundMessage: (sessionId, messageText) => {
