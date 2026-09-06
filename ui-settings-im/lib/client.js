@@ -2564,6 +2564,13 @@ function GuestPermissionsPanel() {
 
 // src/client/BindingsTable.tsx
 var import_jsx_runtime8 = require("react/jsx-runtime");
+function formatLocal(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 var KIND_LABELS2 = {
   wechat: "\u5FAE\u4FE1",
   feishu: "\u98DE\u4E66",
@@ -2588,7 +2595,7 @@ function BindingsTable({ bindings, t, onRemove, onTest }) {
       /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("tbody", { children: bindings.map((row, index) => /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("tr", { children: [
         /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: BotChannelTab_default.bindingKind, children: KIND_LABELS2[row.kind] ?? row.kind }) }),
         /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("td", { className: BotChannelTab_default.bindingSession, children: row.sessionId }),
-        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("td", { children: row.boundAt.replace("T", " ").slice(0, 19) }),
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("td", { children: formatLocal(row.boundAt) }),
         /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("td", { children: [
           onTest !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("button", { type: "button", className: BotChannelTab_default.bindingRemove, style: { marginRight: "8px" }, onClick: () => {
             onTest?.(row);

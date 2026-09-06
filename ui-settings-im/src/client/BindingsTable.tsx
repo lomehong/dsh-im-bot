@@ -6,6 +6,16 @@
 import type { Kind } from './store.ts'
 import css from './BotChannelTab.module.css'
 
+// ISO(UTC) → 查看者本地时区（存储保持 UTC，仅展示层转换）
+function formatLocal(iso: string | undefined): string {
+  if (!iso) return '-'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
 export interface BindingRow {
   kind: Kind
   boundAt: string
@@ -45,7 +55,7 @@ export function BindingsTable({ bindings, t, onRemove, onTest }: BindingsTablePr
               <tr key={`${row.kind}:${row.sessionId}:${index}`}>
                 <td><span className={css.bindingKind}>{KIND_LABELS[row.kind] ?? row.kind}</span></td>
                 <td className={css.bindingSession}>{row.sessionId}</td>
-                <td>{row.boundAt.replace('T', ' ').slice(0, 19)}</td>
+                <td>{formatLocal(row.boundAt)}</td>
                 <td>
                   {onTest !== undefined && (
                     <button type="button" className={css.bindingRemove} style={{ marginRight: '8px' }} onClick={() => { onTest?.(row) }}>
