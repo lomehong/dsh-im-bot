@@ -68,6 +68,11 @@ const wsPath = join(profileDir, 'pnpm-workspace.yaml')
 if (!existsSync(wsPath)) {
   writeFileSync(wsPath, 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n')
 }
+// pnpm 9 只从 .npmrc 读 node-linker（workspace.yaml 里的同名键被静默忽略），双写兼容 9/10。
+const npmrcPath = join(profileDir, '.npmrc')
+if (!existsSync(npmrcPath)) {
+  writeFileSync(npmrcPath, 'node-linker=hoisted\n')
+}
 
 console.log(`[dsh-im-bot] profile 已更新（源：${SOURCE}），开始安装依赖…`)
 const installResult = spawnSync('pnpm', ['install'], {
