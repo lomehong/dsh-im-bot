@@ -52,6 +52,16 @@ manifest.dsh.profile ??= {}
 manifest.dsh.profile.bundles = [...new Set([...(manifest.dsh.profile.bundles ?? []), ...BASE_BUNDLES])]
 for (const pkg of PKGS) manifest.dependencies[pkg.name] = specFor(pkg)
 manifest.dsh.profile.bundles = [...new Set([...manifest.dsh.profile.bundles, ...PKGS.map(p => p.name)])]
+// pnpm 只认安装根上的 overrides（被安装包自己声明的 pnpm.overrides 会被忽略）。
+// 官方 0.1.2 系包存在稳定版 caret 元数据（如 dsh-invariants ^0.1.2 在 registry 无匹配
+// 发布版，只有 0.1.2-rc.1），不钉住则 peers 自动安装链直接 ERR_PNPM_NO_MATCHING_VERSION。
+manifest.pnpm ??= {}
+manifest.pnpm.overrides = {
+  ...manifest.pnpm.overrides,
+  '@deepseek-ai/dsh-invariants': '0.1.2-rc.1',
+  '@deepseek-ai/dsh-session-projection': '0.1.2-rc.1',
+  '@deepseek-ai/dsh-attachment': '0.1.2-rc.1',
+}
 writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
 const wsPath = join(profileDir, 'pnpm-workspace.yaml')
