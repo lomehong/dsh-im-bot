@@ -40,3 +40,4 @@ jobs:
       # 发布包内容审计（dry-run）：files 白名单与入口完整性的门禁
       - run: node scripts/audit-pack.mjs
         working-directory: ${{ matrix.dir }}
+
