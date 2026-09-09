@@ -131,6 +131,54 @@ describe('HarnessDriver.startSession', () => {
     expect(views.some(v => v.includes('reply chunk'))).toBe(true)
   })
 
+  it('types out live via assistant/attempt stream records (dsh 0.1.3+)', async () => {
+    // 新运行时（≥0.1.3）：assistant/chunk 被 assistant/attempt 取代，
+    // payload 携带 lossless 紧凑记录（text-chunks 打包运行 + 裸 chunk）。
+    const ctx = makeContext()
+    const driver = new HarnessDriver(ctx as unknown as never)
+    const sessionId = await driver.startSession({ cwd: '/tmp/proj' })
+    const agent = ctx.agentById.get(sessionId)!
+
+    const views: string[] = []
+    const reply = driver.prompt(sessionId, 'hello', { verbosity: '标准', onUpdate: v => views.push(v) })
+    await drain()
+    emit(ctx, agent, {
+      type: 'assistant/attempt',
+      data: {
+        turn: 1,
+        stream: [
+          { type: 'text-chunks', time0: 1, index: 0, dt: [10, 20], texts: ['你', '好'] },
+          { type: 'reasoning-chunks', time0: 1, index: 1, dt: [5], texts: ['思考中'] },
+          { type: 'chunk', time: 30, chunk: { type: 'text-delta', text: '，世界' } },
+        ],
+      },
+    })
+    // 流式增量应实时进入 live 视图（reasoning 不进文本视图）
+    await drain()
+    expect(views.some(v => v.includes('你好，世界'))).toBe(true)
+    expect(views.some(v => v.includes('思考中'))).toBe(false)
+
+    emit(ctx, agent, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '你好，世界' }] } } })
+    settleAgent(agent)
+    await expect(reply).resolves.toBe('你好，世界')
+  })
+
+  it('still types out via legacy assistant/chunk events (0.1.2 hosts)', async () => {
+    const ctx = makeContext()
+    const driver = new HarnessDriver(ctx as unknown as never)
+    const sessionId = await driver.startSession({ cwd: '/tmp/proj' })
+    const agent = ctx.agentById.get(sessionId)!
+    const views: string[] = []
+    const reply = driver.prompt(sessionId, 'hello', { verbosity: '标准', onUpdate: v => views.push(v) })
+    await drain()
+    emit(ctx, agent, { type: 'assistant/chunk', data: { turn: 1, chunk: { type: 'text-delta', text: '旧运行时增量' } } })
+    await drain()
+    expect(views.some(v => v.includes('旧运行时增量'))).toBe(true)
+    emit(ctx, agent, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '旧运行时增量完成' }] } } })
+    settleAgent(agent)
+    await expect(reply).resolves.toBe('旧运行时增量完成')
+  })
+
   it('returns false from cancel when no turn is in flight', async () => {
     const ctx = makeContext()
     const driver = new HarnessDriver(ctx as unknown as never)

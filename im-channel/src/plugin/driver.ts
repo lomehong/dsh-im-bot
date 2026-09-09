@@ -185,16 +185,41 @@ export class HarnessDriver implements AgentDriver {
           this.emitView(inflight)
         }
       } else if ((event.type as string) === 'assistant/chunk') {
-        // Token-level stream of the message being generated: appending the
-        // text deltas to the partial makes live views type out in real time.
-        // The casts keep this compiling against dsh-session versions whose
-        // SessionEventMap predates chunk events.
+        // 旧运行时（≤0.1.2）的 token 级流式事件：text-delta 增量直接拼接。
+        // 0.1.3+ 改为 assistant/attempt（下方分支）；两形态并存以兼容过渡期混跑。
         const data = event.data as { turn?: number; chunk?: { type?: string; text?: string } }
         const chunk = data.chunk
         if (chunk?.type === 'text-delta' && typeof chunk.text === 'string' && chunk.text.length > 0
           && (inflight.turn === undefined || inflight.turn === data.turn)) {
           inflight.partial += chunk.text
           this.emitView(inflight)
+        }
+      } else if ((event.type as string) === 'assistant/attempt') {
+        // 新运行时（≥0.1.3）的流式事件：stream 是 AssistantStreamRecord[]
+        // （lossless 紧凑记录）。IM live 视图只关心 text 增量——解包 text-chunks
+        // 运行与裸 text-delta chunk，其余类型（reasoning/tool-call）不进文本视图。
+        const data = event.data as {
+          turn?: number
+          stream?: Array<{
+            type?: string
+            texts?: readonly string[]
+            chunk?: { type?: string; text?: string }
+          }>
+        }
+        if (inflight.turn === undefined || inflight.turn === data.turn) {
+          let delta = ''
+          for (const rec of data.stream ?? []) {
+            if (rec.type === 'text-chunks') {
+              for (const t of rec.texts ?? []) if (t.length > 0) delta += t
+            } else if (rec.type === 'chunk' && rec.chunk?.type === 'text-delta'
+              && typeof rec.chunk.text === 'string' && rec.chunk.text.length > 0) {
+              delta += rec.chunk.text
+            }
+          }
+          if (delta.length > 0) {
+            inflight.partial += delta
+            this.emitView(inflight)
+          }
         }
       } else if (event.type === 'tool/call') {
         inflight.toolCount++
