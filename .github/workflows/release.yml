@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # 创建 GitHub Release 并上传 tarball
+
+# 两个子包（im-channel / ui-settings-im）各自构建、审计、上传到同一个 Release。
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: im-channel
+            install: npm ci
+            typecheck: true
+            test: true
+            glob: dsh-extra-im-channel-*.tgz
+            alias: im-channel-latest.tgz
+          - dir: ui-settings-im
+            install: npm install
+            typecheck: false
+            test: false
+            glob: dsh-extra-dsh-client-ui-settings-im-*.tgz
+            alias: dsh-client-ui-settings-im-latest.tgz
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies (${{ matrix.dir }})
+        run: ${{ matrix.install }}
+        working-directory: ${{ matrix.dir }}
+      - if: ${{ matrix.typecheck }}
+        run: npm run typecheck
+        working-directory: ${{ matrix.dir }}
+      - if: ${{ matrix.test }}
+        run: npm test
+        working-directory: ${{ matrix.dir }}
+      - run: npm run build
+        working-directory: ${{ matrix.dir }}
+      - run: npm pack --ignore-scripts
+        working-directory: ${{ matrix.dir }}
+      - run: node scripts/audit-pack.mjs *.tgz --tag "${GITHUB_REF_NAME}"
+        working-directory: ${{ matrix.dir }}
+      - run: cp ${{ matrix.glob }} ../${{ matrix.alias }}
+        working-directory: ${{ matrix.dir }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            im-channel/*.tgz
+            ui-settings-im/*.tgz
+            *-latest.tgz

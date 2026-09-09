@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: im-channel
+            install: npm ci
+            typecheck: true
+            test: true
+          - dir: ui-settings-im
+            install: npm install
+            typecheck: false
+            test: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies (${{ matrix.dir }})
+        run: ${{ matrix.install }}
+        working-directory: ${{ matrix.dir }}
+      - if: ${{ matrix.typecheck }}
+        run: npm run typecheck
+        working-directory: ${{ matrix.dir }}
+      - if: ${{ matrix.test }}
+        run: npm test
+        working-directory: ${{ matrix.dir }}
+      - run: npm run build
+        working-directory: ${{ matrix.dir }}
+      # 发布包内容审计（dry-run）：files 白名单与入口完整性的门禁
+      - run: node scripts/audit-pack.mjs
+        working-directory: ${{ matrix.dir }}
