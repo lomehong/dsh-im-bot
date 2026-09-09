@@ -206,7 +206,7 @@ export function defaultNameFromUrl(url: string): string {
 
 /** 从 stdio 命令推导默认显示名称（取命令 basename，去掉扩展名） */
 export function defaultNameFromCommand(command: string): string {
-  const name = basename(command.trim()).replace(/\.(exe|cmd|bat|sh)$/i, '')
+  const name = basename(command.trim().replace(/\\/g, '/')).replace(/\.(exe|cmd|bat|sh)$/i, '')
   return name !== '' ? name : 'MCP 服务器'
 }
 
