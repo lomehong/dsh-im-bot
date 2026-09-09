@@ -21,8 +21,9 @@ export declare function renderFinal(mode: VerbosityMode, messages: readonly stri
  * Render the in-progress view pushed to live sinks. quiet hides content and
  * only tracks activity; normal/verbose mirror the final rendering so the
  * settled message is a natural continuation of what already streamed. The
- * partial carries the unfinalized tail assembled from assistant/chunk
- * text-delta events, so the view types out while the model generates.
+ * partial carries the unfinalized tail assembled from assistant/attempt
+ * stream records (or legacy assistant/chunk text-delta events), so the
+ * view types out while the model generates.
  */
 export declare function renderLive(mode: VerbosityMode, messages: readonly string[], toolLines: readonly string[], toolCount: number, partial?: string, todos?: readonly {
     content: string;
