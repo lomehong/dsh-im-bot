@@ -83,7 +83,7 @@ if (typeof document !== "undefined") {
 }
 var BotChannelTab_default = { "section": "eiGEEq_section", "intro": "eiGEEq_intro", "cards": "eiGEEq_cards", "card": "eiGEEq_card", "cardIcon": "eiGEEq_cardIcon", "cardName": "eiGEEq_cardName", "cardCount": "eiGEEq_cardCount", "detail": "eiGEEq_detail", "qrPanel": "eiGEEq_qrPanel", "qrImage": "eiGEEq_qrImage", "qrClickArea": "eiGEEq_qrClickArea", "qrRefreshButton": "eiGEEq_qrRefreshButton", "qrRefreshHint": "eiGEEq_qrRefreshHint", "qrSpinner": "eiGEEq_qrSpinner", "qrSpinnerRing": "eiGEEq_qrSpinnerRing", "qrOk": "eiGEEq_qrOk", "qrError": "eiGEEq_qrError", "stepsPanel": "eiGEEq_stepsPanel", "stepsTitle": "eiGEEq_stepsTitle", "steps": "eiGEEq_steps", "step": "eiGEEq_step", "stepNumber": "eiGEEq_stepNumber", "stepBody": "eiGEEq_stepBody", "stepText": "eiGEEq_stepText", "stepNote": "eiGEEq_stepNote", "bindings": "eiGEEq_bindings", "bindingsTitle": "eiGEEq_bindingsTitle", "bindingsEmpty": "eiGEEq_bindingsEmpty", "bindingsTable": "eiGEEq_bindingsTable", "bindingKind": "eiGEEq_bindingKind", "bindingSession": "eiGEEq_bindingSession", "bindingRemove": "eiGEEq_bindingRemove", "passphraseCard": "eiGEEq_passphraseCard", "passphraseTitle": "eiGEEq_passphraseTitle", "passphraseHint": "eiGEEq_passphraseHint", "passphraseCommand": "eiGEEq_passphraseCommand" };
 
-// ../../node_modules/.pnpm/qrcode-generator@2.0.4/node_modules/qrcode-generator/dist/qrcode.mjs
+// node_modules/qrcode-generator/dist/qrcode.mjs
 var qrcode = function(typeNumber, errorCorrectionLevel) {
   const PAD0 = 236;
   const PAD1 = 17;
@@ -2934,16 +2934,54 @@ function ImBotsRail({ t }) {
       ref: rootRef,
       style: {
         position: "absolute",
-        top: "50%",
-        transform: "translateY(-50%)",
+        top: 48,
         right: `${detailsWidth}px`,
         transition: "right var(--ds-transition-duration-slow, 0.3s) var(--ds-ease-in-out, ease-in-out)",
         pointerEvents: "auto",
         display: "flex",
-        alignItems: "center",
-        gap: 8
+        flexDirection: "column",
+        alignItems: "flex-end",
+        gap: 6
       },
       children: [
+        /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(
+          "button",
+          {
+            type: "button",
+            "aria-expanded": expanded,
+            "aria-label": expanded ? t("rail.collapse") : t("rail.expand"),
+            title: expanded ? t("rail.collapse") : t("rail.expand"),
+            onClick: toggleExpanded,
+            style: {
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "7px 10px",
+              border: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
+              cursor: "pointer",
+              borderRadius: 10,
+              background: "var(--dsw-alias-bg-base, #fff)",
+              boxShadow: "0 3px 14px rgba(0, 0, 0, 0.12)",
+              color: "inherit"
+            },
+            children: [
+              ORDER.map((kind) => {
+                const bot = byKind.get(kind);
+                return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("span", { style: { position: "relative", display: "inline-flex" }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(PlatformMark, { kind, size: 18 }),
+                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(
+                    "span",
+                    {
+                      "aria-hidden": true,
+                      style: { position: "absolute", right: -3, bottom: -2, width: 8, height: 8, borderRadius: "50%", background: dotColor(bot), boxShadow: "0 0 0 2px var(--dsw-alias-bg-base, #fff)" }
+                    }
+                  )
+                ] }, kind);
+              }),
+              /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { "aria-hidden": true, style: { fontSize: 11, lineHeight: 1 }, children: expanded ? "\u02C4" : "\u02C5" })
+            ]
+          }
+        ),
         expanded && /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(
           "div",
           {
@@ -2970,7 +3008,7 @@ function ImBotsRail({ t }) {
                     "aria-label": t("rail.collapse"),
                     onClick: toggleExpanded,
                     style: { border: "none", background: "none", cursor: "pointer", color: "inherit", fontSize: 13, padding: "2px 4px" },
-                    children: "\u203A"
+                    children: "\u02C4"
                   }
                 )
               ] }),
@@ -3051,48 +3089,6 @@ function ImBotsRail({ t }) {
                   /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { style: { flex: "none", opacity: 0.6 }, children: relativeTime(binding.boundAt) })
                 ] }, `${binding.sessionId}-${binding.userId}`))
               ] })
-            ]
-          }
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(
-          "button",
-          {
-            type: "button",
-            "aria-expanded": expanded,
-            "aria-label": expanded ? t("rail.collapse") : t("rail.expand"),
-            title: expanded ? t("rail.collapse") : t("rail.expand"),
-            onClick: toggleExpanded,
-            style: {
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 8,
-              padding: "10px 5px",
-              border: "none",
-              cursor: "pointer",
-              borderRadius: "10px 0 0 10px",
-              background: "var(--dsw-alias-bg-base, #fff)",
-              borderLeft: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
-              borderTop: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
-              borderBottom: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
-              boxShadow: "-3px 3px 14px rgba(0, 0, 0, 0.12)",
-              color: "inherit"
-            },
-            children: [
-              ORDER.map((kind) => {
-                const bot = byKind.get(kind);
-                return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("span", { style: { position: "relative", display: "inline-flex" }, children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(PlatformMark, { kind, size: 18 }),
-                  /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(
-                    "span",
-                    {
-                      "aria-hidden": true,
-                      style: { position: "absolute", right: -3, bottom: -2, width: 8, height: 8, borderRadius: "50%", background: dotColor(bot), boxShadow: "0 0 0 2px var(--dsw-alias-bg-base, #fff)" }
-                    }
-                  )
-                ] }, kind);
-              }),
-              /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { "aria-hidden": true, style: { fontSize: 11, lineHeight: 1 }, children: expanded ? "\u203A" : "\u2039" })
             ]
           }
         )
