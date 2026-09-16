@@ -1,6 +1,6 @@
 {
   "name": "@dsh-extra/im-channel",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "IM front-end channels (WeChat, Feishu) for DeepSeek Harness: scan-code login, message routing to agent sessions",
   "license": "MIT",
   "type": "module",
@@ -86,11 +86,6 @@
     "onlyBuiltDependencies": [
       "esbuild",
       "protobufjs"
-    ],
-    "overrides": {
-      "@deepseek-ai/dsh-invariants": "0.1.2-rc.1",
-      "@deepseek-ai/dsh-session-projection": "0.1.2-rc.1",
-      "@deepseek-ai/dsh-attachment": "0.1.2-rc.1"
-    }
+    ]
   }
 }
