@@ -276,3 +276,13 @@ export function BotChannelTab(props: BotChannelTabProps) {
     </div>
   )
 }
+
+/**
+ * 「插件」管理页配置入口（plugins.bundle.config 槽位，key=@dsh-extra/im-channel）：
+ * `view: 'summary'` 渲染插件卡片上的一行简介；`view: 'page'` 渲染完整配置页。
+ * 本组件自身无 hooks（owner 可能以普通函数调用渲染器），有状态的面板全在 BotChannelTab 内。
+ */
+export function BotChannelPluginConfig(props: { view: 'summary' | 'page'; t: (key: string) => string }) {
+  if (props.view === 'page') return <BotChannelTab t={props.t} />
+  return <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }}>{props.t('intro')}</div>
+}

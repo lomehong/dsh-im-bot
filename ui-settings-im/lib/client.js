@@ -2823,6 +2823,10 @@ function BotChannelTab(props) {
     /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(GuestPermissionsPanel, {})
   ] });
 }
+function BotChannelPluginConfig(props) {
+  if (props.view === "page") return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(BotChannelTab, { t: props.t });
+  return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("div", { style: { fontSize: 12, color: "var(--dsw-alias-label-secondary)" }, children: props.t("intro") });
+}
 
 // src/client/ImBotsRail.tsx
 var import_react5 = require("react");
@@ -3214,15 +3218,10 @@ var inject = ["slots", "locale"];
 function apply(ctx) {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), "ui-settings-im: copy dictionaries");
   const t = ctx.locale.bind(NS);
-  const injected = () => ({ t: (key) => t(key) });
-  ctx.slots.inject("settings.plugins.tab", () => ctx.slots.register({
-    name: "settings.plugins.tab",
-    id: "bot-channel",
-    order: 10,
-    label: () => t("nav"),
-    locale: NS,
-    inject: injected
-  }, BotChannelTab));
+  ctx.slots.inject("plugins.bundle.config", () => ctx.slots.register({
+    name: "plugins.bundle.config",
+    key: "@dsh-extra/im-channel"
+  }, (props) => BotChannelPluginConfig({ view: props.view, t: (key) => t(key) })));
   ctx.slots.inject("shell.overlay", () => ctx.slots.register({
     name: "shell.overlay",
     id: "im-bots-rail",
