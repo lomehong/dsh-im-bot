@@ -613,6 +613,15 @@ export class HarnessDriver {
             }
             catch { /* 装配失败：跳过本轮记忆注入 */ }
         }
+        // 渠道适配（对齐"分身=单一心智，渠道=终端"）：把人话作为观察注入分身心智
+        // 时间线（dsh-mind 据此感知互动并按自身节奏反应）。dsh-mind 缺席 → 零回归。
+        if (text.trim() !== '') {
+            try {
+                const mind = this.ctx.get('dsh-mind');
+                mind?.injectObservation?.(options.userId ?? 'unknown', text);
+            }
+            catch { /* 注入失败不影响派发 */ }
+        }
         const mode = modeOf(options.verbosity);
         // 记录本轮发起者：工具守卫与审批按此归因（含 userId，审批卡片展示用）。
         this.turnInfos.set(sessionId, { actor: options.actor ?? 'owner', userId: options.userId ?? 'unknown' });
