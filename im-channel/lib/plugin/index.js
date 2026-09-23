@@ -96,6 +96,31 @@ export function apply(ctx, config) {
             void mcpRegistry.resyncGlobal(ctx).catch(() => { });
         },
     });
+    // 分身投递通路（§6.1 单向注册）：dsh-mind 的 share/主动找主人经此送达
+    // 主人绑定（dsh-mind 缺席 → 不注册，零回归）。到主人=第一个主人绑定。
+    ctx.inject(['dsh-mind'], (mctx) => {
+        const mind = mctx.get('dsh-mind');
+        if (mind?.registerChannel === undefined)
+            return;
+        mind.registerChannel({
+            id: 'im-channel',
+            deliver: (payload) => {
+                if (payload.to !== 'master')
+                    return false; // P2 只支持送达主人
+                const r = router;
+                if (r === undefined)
+                    return false;
+                for (const bot of collectBotStatus(r.channels)) {
+                    for (const b of bot.bindings) {
+                        if (b.isMaster === true && typeof b.userId === 'string' && b.userId !== '') {
+                            return r.pushToUser(bot.kind, b.userId, payload.text, { markdown: true });
+                        }
+                    }
+                }
+                return false; // 主人未绑定 IM
+            },
+        });
+    });
     // One driver for the whole plugin lifetime: router rebuilds (settings
     // edits, instance reconciliation) must not orphan bound sessions — the
     // driver's owned-session map is what /bind hands out.
