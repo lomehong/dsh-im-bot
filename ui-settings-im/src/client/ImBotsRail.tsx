@@ -9,17 +9,22 @@
  *
  * 数据来自 GET /im-channel/bots/status，30 秒轮询（页面隐藏时暂停）。
  *
- * 位置与避让：
- * - top 固定 48px：落在主区头部行（标题/右上工具行）下方、与导航 Tab 行
- *   同带的右端空白区，不遮右上角工具，也不压内容流；
- * - right 避让：AppFrame 把三列宽度写在 frame 元素的 grid-template-columns
- *   内联样式里（第三列 = 右侧详情栏，0 = 收起）。本组件通过 MutationObserver
- *   跟踪该样式，把 right 偏移设为详情栏当前宽度——详情栏打开时吸附行
- *   平移到其左侧，收起时贴回视口右缘；transition 与 frame 的列过渡同速。
+ * 位置与避让（v0.1.7 改为测量式 + 套件状态坞让位）：
+ * - top：原固定 48px 是按浏览器壳头部几何写死的——桌面壳头部更高，横签会压上
+ *   原生工具行。现改为测量式：取会话头部行（data-conversation-header-corner
+ *   的父元素）底边 + 8px，测量失败回落 48；
+ * - right：AppFrame 把三列宽度写在 frame 元素的 grid-template-columns 内联
+ *   样式里（第三列 = 右侧详情栏，0 = 收起）。本组件通过 MutationObserver
+ *   跟踪该样式，right = 详情栏当前宽度 + 12px 呼吸边——详情栏打开时吸附行
+ *   平移到其左侧，收起时贴回视口右缘；transition 与 frame 的列过渡同速；
+ * - 让位：dsh-twin 套件状态坞（suite-dock）在场（localStorage 心跳新鲜）时，
+ *   本组件整体让位（渲染 null）——dock 缺席（twin 未装）自动回归常驻，
+ *   联邦语义不破坏（宪章原则二）。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ImKey } from './locales.ts'
 import { WechatMark, FeishuMark, WecomMark } from './platform-marks.tsx'
+import { useDockPresent } from './dock-handshake.ts'
 
 interface ImBotBindingUI {
   userId: string
@@ -88,13 +93,15 @@ function detailsWidthOf(frame: HTMLElement): number {
   return Number.isFinite(px) ? Math.max(0, px) : 0
 }
 
-export function ImBotsRail({ t }: ImBotsRailInjected): React.ReactElement {
+export function ImBotsRail({ t }: ImBotsRailInjected): React.ReactElement | null {
   const [bots, setBots] = useState<ImBotStatusUI[] | undefined>(undefined)
   const [loadError, setLoadError] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [activeTab, setActiveTab] = useState<ImBotStatusUI['kind'] | undefined>(undefined)
   const [detailsWidth, setDetailsWidth] = useState(0)
+  const [topOffset, setTopOffset] = useState(48)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const dockPresent = useDockPresent()
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -133,7 +140,7 @@ export function ImBotsRail({ t }: ImBotsRailInjected): React.ReactElement {
     if (next) void refresh()
   }, [expanded, refresh])
 
-  // 跟随右侧详情栏宽度：root.parentElement = overlay 层，其父 = frame。
+  // 跟随右侧详情栏宽度 + 测量头部行底边（root.parentElement = overlay 层，其父 = frame）。
   useLayoutEffect(() => {
     const root = rootRef.current
     if (root === null) return
@@ -146,14 +153,23 @@ export function ImBotsRail({ t }: ImBotsRailInjected): React.ReactElement {
         const next = detailsWidthOf(frame)
         return prev === next ? prev : next
       })
+      // 测量式避让（A）：头部行底边 + 8px；查询失败（浏览器壳结构差异）回落 48。
+      const corner = document.querySelector('[data-conversation-header-corner]')
+      const header = corner?.parentElement ?? null
+      const next = header !== null
+        ? Math.max(48, Math.round(header.getBoundingClientRect().bottom) + 8)
+        : 48
+      setTopOffset(prev => (prev === next ? prev : next))
     }
     const observer = new MutationObserver(() => {
       if (raf === 0) raf = requestAnimationFrame(measure)
     })
     observer.observe(frame, { attributes: true, attributeFilter: ['style'] })
+    window.addEventListener('resize', measure)
     measure()
     return () => {
       observer.disconnect()
+      window.removeEventListener('resize', measure)
       if (raf !== 0) cancelAnimationFrame(raf)
     }
   }, [])
@@ -163,13 +179,16 @@ export function ImBotsRail({ t }: ImBotsRailInjected): React.ReactElement {
   const active = activeTab ?? ORDER[0]
   const activeBot = byKind.get(active)
 
+  // 套件状态坞在场 → 本组件整体让位（dock 缺席自动回归；hooks 已全部执行，顺序稳定）。
+  if (dockPresent) return null
+
   return (
     <div
       ref={rootRef}
       style={{
         position: 'absolute',
-        top: 48,
-        right: `${detailsWidth}px`,
+        top: topOffset,
+        right: `${detailsWidth + 12}px`,
         transition: 'right var(--ds-transition-duration-slow, 0.3s) var(--ds-ease-in-out, ease-in-out)',
         pointerEvents: 'auto',
         display: 'flex',

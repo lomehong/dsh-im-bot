@@ -83,7 +83,7 @@ if (typeof document !== "undefined") {
 }
 var BotChannelTab_default = { "section": "eiGEEq_section", "intro": "eiGEEq_intro", "cards": "eiGEEq_cards", "card": "eiGEEq_card", "cardIcon": "eiGEEq_cardIcon", "cardName": "eiGEEq_cardName", "cardCount": "eiGEEq_cardCount", "detail": "eiGEEq_detail", "qrPanel": "eiGEEq_qrPanel", "qrImage": "eiGEEq_qrImage", "qrClickArea": "eiGEEq_qrClickArea", "qrRefreshButton": "eiGEEq_qrRefreshButton", "qrRefreshHint": "eiGEEq_qrRefreshHint", "qrSpinner": "eiGEEq_qrSpinner", "qrSpinnerRing": "eiGEEq_qrSpinnerRing", "qrOk": "eiGEEq_qrOk", "qrError": "eiGEEq_qrError", "stepsPanel": "eiGEEq_stepsPanel", "stepsTitle": "eiGEEq_stepsTitle", "steps": "eiGEEq_steps", "step": "eiGEEq_step", "stepNumber": "eiGEEq_stepNumber", "stepBody": "eiGEEq_stepBody", "stepText": "eiGEEq_stepText", "stepNote": "eiGEEq_stepNote", "bindings": "eiGEEq_bindings", "bindingsTitle": "eiGEEq_bindingsTitle", "bindingsEmpty": "eiGEEq_bindingsEmpty", "bindingsTable": "eiGEEq_bindingsTable", "bindingKind": "eiGEEq_bindingKind", "bindingSession": "eiGEEq_bindingSession", "bindingRemove": "eiGEEq_bindingRemove", "passphraseCard": "eiGEEq_passphraseCard", "passphraseTitle": "eiGEEq_passphraseTitle", "passphraseHint": "eiGEEq_passphraseHint", "passphraseCommand": "eiGEEq_passphraseCommand" };
 
-// node_modules/qrcode-generator/dist/qrcode.mjs
+// ../../node_modules/.pnpm/qrcode-generator@2.0.4/node_modules/qrcode-generator/dist/qrcode.mjs
 var qrcode = function(typeNumber, errorCorrectionLevel) {
   const PAD0 = 236;
   const PAD1 = 17;
@@ -2829,7 +2829,45 @@ function BotChannelPluginConfig(props) {
 }
 
 // src/client/ImBotsRail.tsx
+var import_react6 = require("react");
+
+// src/client/dock-handshake.ts
 var import_react5 = require("react");
+var DOCK_STORAGE_KEY = "dsh-suite-dock";
+var DOCK_FRESH_MS = 9e4;
+var EV_READY = "suite-dock:ready";
+var EV_GONE = "suite-dock:gone";
+function dockFresh(raw, now = Date.now()) {
+  if (raw === null || raw === void 0 || raw === "") return false;
+  const t = Date.parse(raw);
+  return Number.isFinite(t) && now - t >= 0 && now - t < DOCK_FRESH_MS;
+}
+function safeGet() {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage.getItem(DOCK_STORAGE_KEY) : null;
+  } catch {
+    return null;
+  }
+}
+function useDockPresent() {
+  const [present, setPresent] = (0, import_react5.useState)(() => dockFresh(safeGet()));
+  (0, import_react5.useEffect)(() => {
+    const recheck = () => {
+      setPresent(dockFresh(safeGet()));
+    };
+    window.addEventListener(EV_READY, recheck);
+    window.addEventListener(EV_GONE, recheck);
+    const t = window.setInterval(recheck, 3e4);
+    return () => {
+      window.removeEventListener(EV_READY, recheck);
+      window.removeEventListener(EV_GONE, recheck);
+      window.clearInterval(t);
+    };
+  }, []);
+  return present;
+}
+
+// src/client/ImBotsRail.tsx
 var import_jsx_runtime10 = require("react/jsx-runtime");
 var POLL_MS = 3e4;
 var DOT_ONLINE = "#2A9D8F";
@@ -2867,13 +2905,15 @@ function detailsWidthOf(frame) {
   return Number.isFinite(px) ? Math.max(0, px) : 0;
 }
 function ImBotsRail({ t }) {
-  const [bots, setBots] = (0, import_react5.useState)(void 0);
-  const [loadError, setLoadError] = (0, import_react5.useState)(false);
-  const [expanded, setExpanded] = (0, import_react5.useState)(false);
-  const [activeTab, setActiveTab] = (0, import_react5.useState)(void 0);
-  const [detailsWidth, setDetailsWidth] = (0, import_react5.useState)(0);
-  const rootRef = (0, import_react5.useRef)(null);
-  const refresh = (0, import_react5.useCallback)(async () => {
+  const [bots, setBots] = (0, import_react6.useState)(void 0);
+  const [loadError, setLoadError] = (0, import_react6.useState)(false);
+  const [expanded, setExpanded] = (0, import_react6.useState)(false);
+  const [activeTab, setActiveTab] = (0, import_react6.useState)(void 0);
+  const [detailsWidth, setDetailsWidth] = (0, import_react6.useState)(0);
+  const [topOffset, setTopOffset] = (0, import_react6.useState)(48);
+  const rootRef = (0, import_react6.useRef)(null);
+  const dockPresent = useDockPresent();
+  const refresh = (0, import_react6.useCallback)(async () => {
     try {
       const resp = await fetch("/im-channel/bots/status");
       const data = await resp.json();
@@ -2887,7 +2927,7 @@ function ImBotsRail({ t }) {
       setLoadError(true);
     }
   }, []);
-  (0, import_react5.useEffect)(() => {
+  (0, import_react6.useEffect)(() => {
     void refresh();
     const timer = window.setInterval(() => {
       if (!document.hidden) void refresh();
@@ -2901,12 +2941,12 @@ function ImBotsRail({ t }) {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [refresh]);
-  const toggleExpanded = (0, import_react5.useCallback)(() => {
+  const toggleExpanded = (0, import_react6.useCallback)(() => {
     const next = !expanded;
     setExpanded(next);
     if (next) void refresh();
   }, [expanded, refresh]);
-  (0, import_react5.useLayoutEffect)(() => {
+  (0, import_react6.useLayoutEffect)(() => {
     const root = rootRef.current;
     if (root === null) return;
     const frame = root.parentElement?.parentElement ?? null;
@@ -2915,31 +2955,38 @@ function ImBotsRail({ t }) {
     const measure = () => {
       raf = 0;
       setDetailsWidth((prev) => {
-        const next = detailsWidthOf(frame);
-        return prev === next ? prev : next;
+        const next2 = detailsWidthOf(frame);
+        return prev === next2 ? prev : next2;
       });
+      const corner = document.querySelector("[data-conversation-header-corner]");
+      const header = corner?.parentElement ?? null;
+      const next = header !== null ? Math.max(48, Math.round(header.getBoundingClientRect().bottom) + 8) : 48;
+      setTopOffset((prev) => prev === next ? prev : next);
     };
     const observer = new MutationObserver(() => {
       if (raf === 0) raf = requestAnimationFrame(measure);
     });
     observer.observe(frame, { attributes: true, attributeFilter: ["style"] });
+    window.addEventListener("resize", measure);
     measure();
     return () => {
       observer.disconnect();
+      window.removeEventListener("resize", measure);
       if (raf !== 0) cancelAnimationFrame(raf);
     };
   }, []);
-  const byKind = (0, import_react5.useMemo)(() => new Map(bots?.map((b) => [b.kind, b]) ?? []), [bots]);
+  const byKind = (0, import_react6.useMemo)(() => new Map(bots?.map((b) => [b.kind, b]) ?? []), [bots]);
   const active = activeTab ?? ORDER[0];
   const activeBot = byKind.get(active);
+  if (dockPresent) return null;
   return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(
     "div",
     {
       ref: rootRef,
       style: {
         position: "absolute",
-        top: 48,
-        right: `${detailsWidth}px`,
+        top: topOffset,
+        right: `${detailsWidth + 12}px`,
         transition: "right var(--ds-transition-duration-slow, 0.3s) var(--ds-ease-in-out, ease-in-out)",
         pointerEvents: "auto",
         display: "flex",
