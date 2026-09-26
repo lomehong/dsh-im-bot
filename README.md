@@ -1,5 +1,7 @@
 # dsh-im-bot
 
+> **v0.1.8**：ui-settings-im 横签闪现修复（握手初值改「键存在即让位」+10 分钟宽限）；im-channel 主包无功能变更，随批同步版本号。
+
 > **v0.1.7**：ui-settings-im（机器人状态横签）测量式避让 + 套件状态坞让位契约；im-channel 主包无功能变更，随批同步版本号。 — 手机接入 DeepSeek Harness
 
 把 **飞书 / 微信 / 企业微信** 变成你的 DeepSeek Harness（dsh）数字分身入口：
