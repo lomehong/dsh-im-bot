@@ -2834,14 +2834,9 @@ var import_react6 = require("react");
 // src/client/dock-handshake.ts
 var import_react5 = require("react");
 var DOCK_STORAGE_KEY = "dsh-suite-dock";
-var DOCK_FRESH_MS = 9e4;
+var DOCK_STALE_MS = 10 * 6e4;
 var EV_READY = "suite-dock:ready";
 var EV_GONE = "suite-dock:gone";
-function dockFresh(raw, now = Date.now()) {
-  if (raw === null || raw === void 0 || raw === "") return false;
-  const t = Date.parse(raw);
-  return Number.isFinite(t) && now - t >= 0 && now - t < DOCK_FRESH_MS;
-}
 function safeGet() {
   try {
     return typeof localStorage !== "undefined" ? localStorage.getItem(DOCK_STORAGE_KEY) : null;
@@ -2850,14 +2845,21 @@ function safeGet() {
   }
 }
 function useDockPresent() {
-  const [present, setPresent] = (0, import_react5.useState)(() => dockFresh(safeGet()));
+  const [present, setPresent] = (0, import_react5.useState)(() => safeGet() !== null);
   (0, import_react5.useEffect)(() => {
     const recheck = () => {
-      setPresent(dockFresh(safeGet()));
+      const raw = safeGet();
+      if (raw === null) {
+        setPresent(false);
+        return;
+      }
+      const t2 = Date.parse(raw);
+      setPresent(!(Number.isFinite(t2) && Date.now() - t2 > DOCK_STALE_MS));
     };
+    recheck();
     window.addEventListener(EV_READY, recheck);
     window.addEventListener(EV_GONE, recheck);
-    const t = window.setInterval(recheck, 3e4);
+    const t = window.setInterval(recheck, 1e4);
     return () => {
       window.removeEventListener(EV_READY, recheck);
       window.removeEventListener(EV_GONE, recheck);
