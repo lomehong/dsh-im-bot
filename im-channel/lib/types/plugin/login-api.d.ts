@@ -4,13 +4,38 @@
  * image renders in the browser from the URL the platform returns; the host
  * only brokers the credential exchange.
  */
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Context } from '@deepseek-ai/cordis';
+/**
+ * im-channel 配置节视图（0.1.7 契约，docs/migration-0.1.7.md §4-T3）：
+ * 配置权威 = Loader 注入 apply(config)，插件重载即最新；读取不需要 settings。
+ */
+export interface LoginSectionView {
+    read(): {
+        channels?: Record<string, {
+            kind: 'feishu' | 'wechat' | 'wecom';
+            enabled?: boolean;
+        }>;
+        guestTools?: string[];
+        guestCommands?: string[];
+        memoryAssemblePerTurn?: boolean;
+    };
+}
+/** webServer 路由注册面（exact 路由）。 */
+export interface RouteWeb {
+    register(route: {
+        kind: 'exact';
+        path: string;
+        handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
+    }): () => void;
+}
 /** Session record the platform login bridges write the QR URL onto. */
 export interface QrLoginBridge {
     qrUrl: string | undefined;
 }
 export declare class LoginApi {
     private readonly ctx;
+    private readonly section;
     private session;
     /** 企业微信扫码创建会话（scode），start 时建立、status 轮询消费。 */
     private wecomQr;
@@ -22,7 +47,21 @@ export declare class LoginApi {
      * 间隔至多一次，与并发数无关。
      */
     private readonly wecomQrPolls;
-    constructor(ctx: Context);
+    /**
+     * @param ctx 插件根上下文——服务读取（get('settings')/'im-channel'）统一走这里。
+     *  曾在 webServer 注入回调的子上下文上 inject(['settings'])：回调体内
+     *  settings.get 在 0.1.7 已不存在，TypeError 落在 Promise executor 之外，
+     *  永不 settle → 访客权限永久「加载中」、企微实例行写不进（通道离线、
+     *  /bind 无响应）——0.1.7 契约下读值一律走节视图、写值走 get+update。
+     * @param scoped webServer 注入回调的上下文（仅用于取 webServer 句柄注册路由）。
+     * @param section 配置节视图（apply(config) 的惰性读取面）。
+     */
+    constructor(ctx: Context, scoped: {
+        webServer?: RouteWeb;
+    }, section: LoginSectionView);
+    private readonly web;
+    /** 读取 settings 服务（写路径专用）；缺席时返回 undefined，调用方显式报错。 */
+    private settingsWriter;
     /** Register the /im-channel/login/* routes on the web server. */
     register(): void;
     /** GET /im-channel/guest-permissions：当前配置 + 工具/命令目录 + Owner 状态。 */
@@ -33,8 +72,8 @@ export declare class LoginApi {
     private handleTestSend;
     /** The first bound userId of a channel kind (test-send target). */
     private userIdForFirstBinding;
-    /** Read the im-channel settings section values this surface reports. */
-    private readSettingsSection;
+    /** 读取配置节当前值（0.1.7：apply(config) 的节视图，同步、零注入）。 */
+    private readSection;
     private handleBindingRemove;
     private handleWecomConfigure;
     /** GET /im-channel/wecom/qr/start：生成扫码创建机器人的二维码。 */
@@ -59,8 +98,11 @@ export declare class LoginApi {
      * instance per platform: the wechat protocol allows exactly one poll
      * session per bot token, and duplicate instances multiply every reply.
      *
-     * @returns true 当该平台实例行已存在（本次未写 settings，onChange 不会
-     *   被 trigger——调用方需自行拉起通道，见 bringChannelUp）。
+     * 0.1.7：实例行经 settings.update 写条目配置 → configEditor 应用 → Loader
+     * 重载本插件（apply 重入）→ rebuildRouter 自动发生，不再依赖 onChange。
+     *
+     * @returns true 当该平台实例行已存在（本次未写配置，重载不会发生——
+     *   调用方需自行拉起通道，见 bringChannelUp）。
      */
     private ensureChannelInstance;
     /**

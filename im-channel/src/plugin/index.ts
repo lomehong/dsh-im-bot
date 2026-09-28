@@ -22,9 +22,6 @@ export const name = 'im-channel'
 export const inject = ['agents', 'tools']
 export const provide = ['im-channel']
 
-// alpha.2 起 settingsNamespace() 移除：裸字面量由 SettingsNamespaceInput 约束。
-const NS = 'im-channel'
-
 /** One user-declared channel instance; key in the dict is the instance name. */
 export interface ChannelInstanceConfig {
   kind: ChannelKind
@@ -95,14 +92,18 @@ function buildChannel(kind: ChannelKind, ctx: Context): ImChannel {
 }
 
 export function apply(ctx: Context, config: ImChannelSection): void {
+  // 配置节视图：0.1.7 契约下配置权威 = Loader 注入的 apply(config)，
+  // 插件重载（configEditor 应用条目配置）即重入 apply、读到最新。
+  const section = createSectionView<ImChannelSection>(config)
   // Browser-facing login routes: /im-channel/login/start and /status.
+  // 0.1.7 契约（docs/migration-0.1.7.md §4-T3）：根 ctx 管服务读取、
+  // scoped 只取 webServer 句柄、配置读取走节视图——不再在子上下文上
+  // inject(['settings'])（settings.get 已移除，回调抛错曾致路由挂起）。
   ctx.inject(['webServer'], (wctx: Context) => {
-    new LoginApi(wctx).register()
+    const scoped = wctx as unknown as { webServer?: import('./login-api.ts').RouteWeb }
+    new LoginApi(ctx, scoped, section).register()
   })
 
-  // settings 节视图：必须惰性读取（见 section-view.ts 头注释——缓存快照
-  // 会导致运行期改动全部失效、只有重启才能恢复）。
-  const section = createSectionView<ImChannelSection>(config)
   let router: Router | undefined
   let disposeRouter: (() => void) | undefined
   // 暴露 im-channel 服务：其他插件（如 yuyi）可主动推送消息到 IM 用户。
@@ -429,62 +430,10 @@ export function apply(ctx: Context, config: ImChannelSection): void {
       disposeRouter = () => { void owned.stop(); router = undefined }
   }
 
-  // alpha.2 起模块级 installSettingsSection() 移除：经 inject(['settings'])
-  // 取提供方，调用 SettingsProvider.installSection()（hooks 形状不变，
-  // 参考 dsh-yuyi/dsh-agent-default-model 的同等迁移）。
-  ctx.inject(['settings'], (sctx) => {
-    sctx.settings.installSection(ctx, NS, Config, config, {
-      setSource: (source) => { section.adopt(source) },
-      onChange: () => {
-        // Reconcile the live router against the declared instances: a changed
-        // set, kind, or enabled flag restarts the router wholesale — channel
-        // connections are cheap to re-establish relative to config edits.
-        const next = section.read()
-        // A platform with saved credentials but no declared instance (e.g.
-        // credentials persisted before this reconciliation existed, or settings
-        // storage was reset) gets an auto-created instance so the bot actually
-        // comes online after login. The settings service is optional at the
-        // composition level, so reach it through a scoped inject.
-        ctx.inject(['settings'], sctx => {
-          void ensureInstancesForCredentials(sctx, next).catch(() => {})
-        })
-        if (router !== undefined && sameTopology(router, next)) return
-        rebuildRouter()
-      },
-    })
-  })
-}
-
-/** Whether the live router already serves exactly this topology. */
-function sameTopology(router: Router, next: ImChannelSection): boolean {
-  const live = router.channels
-  const wanted = Object.entries(next.channels)
-    .filter(([, instance]) => instance.enabled)
-    .map(([, instance]) => instance.kind)
-    .sort()
-  const liveKinds = live.map(channel => channel.kind).sort()
-  return liveKinds.length === wanted.length && liveKinds.every((kind, index) => kind === wanted[index])
-}
-
-/** Auto-create instances for platforms that have credentials but no row. */
-async function ensureInstancesForCredentials(ctx: Context, next: ImChannelSection): Promise<void> {
-  const KIND_LABELS: Record<ChannelKind, string> = { wechat: '微信', feishu: '飞书', wecom: '企业微信' }
-  const patch: Record<string, { kind: ChannelKind; enabled: boolean; displayName: string }> = {}
-  let changed = false
-  for (const kind of ['wechat', 'feishu', 'wecom'] as const) {
-    if (!isCredentialled(kind)) continue
-    const sameKind = Object.entries(next.channels).filter(([, v]) => v.kind === kind)
-    if (sameKind.length > 0) continue
-    const name = `${kind}-1`
-    patch[name] = { kind, enabled: true, displayName: `${KIND_LABELS[kind]}机器人 1` }
-    changed = true
-  }
-  if (!changed) return
-  try {
-    // 合并写：settings.update 对 channels dict 是整体替换语义，只写新行
-    // 会抹掉已声明的其他平台实例；保留现有行再追加。
-    await ctx.settings.update(NS, { channels: { ...next.channels, ...patch } })
-  } catch (error) {
-    ctx.logger.warn(`im-channel: 为已登录平台自动创建实例失败: ${error instanceof Error ? error.message : String(error)}`)
-  }
+  // 0.1.7 设置契约（docs/migration-0.1.7.md §4-T3）：installSection 已随
+  // settings 重写移除（0.1.8 在 0.1.7-rc.2 运行时上调用它 = TypeError，
+  // onChange 永不触发 → 路由永不重建 → 通道离线、/bind 无响应）。
+  // 新模型：配置权威 = Loader 注入的 apply(config)；条目配置变更由
+  // configEditor 应用 → 插件重载 → apply 重入 → 这里全量重建。
+  rebuildRouter()
 }

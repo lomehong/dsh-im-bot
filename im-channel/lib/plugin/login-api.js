@@ -15,6 +15,7 @@ const NS = 'im-channel';
 const SESSION_TTL_MS = 8 * 60_000;
 export class LoginApi {
     ctx;
+    section;
     session;
     /** 企业微信扫码创建会话（scode），start 时建立、status 轮询消费。 */
     wecomQr;
@@ -29,16 +30,35 @@ export class LoginApi {
         const { WecomQrAuth } = await import("../channels/wecom/qr-auth.js");
         return await new WecomQrAuth().poll(scode);
     });
-    constructor(ctx) {
+    /**
+     * @param ctx 插件根上下文——服务读取（get('settings')/'im-channel'）统一走这里。
+     *  曾在 webServer 注入回调的子上下文上 inject(['settings'])：回调体内
+     *  settings.get 在 0.1.7 已不存在，TypeError 落在 Promise executor 之外，
+     *  永不 settle → 访客权限永久「加载中」、企微实例行写不进（通道离线、
+     *  /bind 无响应）——0.1.7 契约下读值一律走节视图、写值走 get+update。
+     * @param scoped webServer 注入回调的上下文（仅用于取 webServer 句柄注册路由）。
+     * @param section 配置节视图（apply(config) 的惰性读取面）。
+     */
+    constructor(ctx, scoped, section) {
         this.ctx = ctx;
+        this.section = section;
+        this.web = scoped.webServer;
+    }
+    web;
+    /** 读取 settings 服务（写路径专用）；缺席时返回 undefined，调用方显式报错。 */
+    settingsWriter() {
+        const settings = this.ctx.get('settings');
+        if (settings === undefined || typeof settings.update !== 'function')
+            return undefined;
+        return { update: (ns, patch) => settings.update(ns, patch) };
     }
     /** Register the /im-channel/login/* routes on the web server. */
     register() {
-        // Narrow local view of the webServer service: the runtime name and the
-        // published typings' augmentation have drifted between harness versions
-        // (webServer locally, httpServer in older published rc's), so reach
-        // through a structural cast that compiles against both.
-        const web = this.ctx.webServer;
+        if (this.web === undefined) {
+            this.ctx.logger?.warn?.('im-channel: webServer 句柄不可用，登录/配置路由未注册');
+            return;
+        }
+        const web = this.web;
         web.register({
             kind: 'exact',
             path: '/im-channel/login/start',
@@ -147,7 +167,7 @@ export class LoginApi {
             try {
                 const { GUEST_TOOL_CATALOG, GUEST_COMMAND_CATALOG, DEFAULT_GUEST_COMMANDS } = await import("../core/guest-permissions.js");
                 const { BindStore } = await import("../core/bind-store.js");
-                const section = await this.readSettingsSection();
+                const section = this.readSection();
                 const owners = {};
                 for (const kind of KINDS) {
                     const owner = BindStore.shared.ownerFor(kind);
@@ -185,11 +205,12 @@ export class LoginApi {
                 respondJson(res, 400, { ok: false, error: 'guestTools/guestCommands 至少提供一个有效数组' });
                 return;
             }
-            await new Promise((resolve, reject) => {
-                this.ctx.inject(['settings'], sctx => {
-                    void sctx.settings.update(NS, patch).then(resolve, reject);
-                });
-            });
+            const settings = this.settingsWriter();
+            if (settings === undefined) {
+                respondJson(res, 500, { ok: false, error: 'settings 服务不可用，无法保存访客权限' });
+                return;
+            }
+            await settings.update(NS, patch);
             respondJson(res, 200, { ok: true });
         }
         catch (error) {
@@ -228,14 +249,9 @@ export class LoginApi {
         const rows = BindStore.shared.rowsForListing();
         return rows.find(row => row.kind === kind)?.userId ?? '';
     }
-    /** Read the im-channel settings section values this surface reports. */
-    async readSettingsSection() {
-        return await new Promise(resolve => {
-            this.ctx.inject(['settings'], sctx => {
-                const section = sctx.settings.get(NS);
-                resolve(section ?? {});
-            });
-        });
+    /** 读取配置节当前值（0.1.7：apply(config) 的节视图，同步、零注入）。 */
+    readSection() {
+        return this.section.read();
     }
     async handleBindingRemove(req, res) {
         try {
@@ -501,44 +517,33 @@ export class LoginApi {
      * instance per platform: the wechat protocol allows exactly one poll
      * session per bot token, and duplicate instances multiply every reply.
      *
-     * @returns true 当该平台实例行已存在（本次未写 settings，onChange 不会
-     *   被 trigger——调用方需自行拉起通道，见 bringChannelUp）。
+     * 0.1.7：实例行经 settings.update 写条目配置 → configEditor 应用 → Loader
+     * 重载本插件（apply 重入）→ rebuildRouter 自动发生，不再依赖 onChange。
+     *
+     * @returns true 当该平台实例行已存在（本次未写配置，重载不会发生——
+     *   调用方需自行拉起通道，见 bringChannelUp）。
      */
     async ensureChannelInstance(kind) {
-        try {
-            return await new Promise(resolve => {
-                this.ctx.inject(['settings'], async (sctx) => {
-                    try {
-                        const section = sctx.settings.get(NS);
-                        const channels = section?.channels ?? {};
-                        const exists = Object.values(channels).some(v => v.kind === kind);
-                        if (exists) {
-                            resolve(true);
-                            return;
-                        }
-                        // 合并写：settings.update 对 channels dict 是整体替换语义，
-                        // 只写新行会抹掉其他平台已声明的实例（生产曾踩：配完企微
-                        // 后飞书/微信实例行消失）。保留现有行再追加。
-                        await sctx.settings.update(NS, {
-                            channels: {
-                                ...channels,
-                                [`${kind}-1`]: { kind, enabled: true, displayName: `${KIND_LABELS[kind]}机器人 1` },
-                            },
-                        });
-                        resolve(false);
-                    }
-                    catch (inner) {
-                        // settings 读/写失败：按"已新建"返回，让既有 onChange 链兜底。
-                        this.ctx.logger.warn(`im-channel: 自动创建 ${kind} 实例失败: ${messageOf(inner)}`);
-                        resolve(false);
-                    }
-                });
-            });
+        const channels = this.readSection().channels ?? {};
+        const exists = Object.values(channels).some(v => v.kind === kind);
+        if (exists)
+            return true;
+        const settings = this.settingsWriter();
+        if (settings === undefined) {
+            // 与旧行为（写失败按"已新建"兜底）不同：0.1.7 下静默兜底会让通道永远
+            // 起不来且无提示——显式报错，让设置页把原因亮给 Owner。
+            throw new Error('settings 服务不可用：无法自动创建通道实例（可改在插件配置或 patch 中声明）');
         }
-        catch (error) {
-            this.ctx.logger.warn(`im-channel: 自动创建 ${kind} 实例失败: ${messageOf(error)}`);
-            return false;
-        }
+        // 合并写：settings.update 对 channels dict 是整体替换语义，
+        // 只写新行会抹掉其他平台已声明的实例（生产曾踩：配完企微
+        // 后飞书/微信实例行消失）。保留现有行再追加。
+        await settings.update(NS, {
+            channels: {
+                ...channels,
+                [`${kind}-1`]: { kind, enabled: true, displayName: `${KIND_LABELS[kind]}机器人 1` },
+            },
+        });
+        return false;
     }
     /**
      * 凭证保存成功后让通道尽快上线。两条路：
