@@ -415,6 +415,7 @@ const driver = new HarnessDriver(ctx, {
   ctx.inject(['userQuestions'], (uqCtx: Context) => {
     escDebug('inject 回调触发（userQuestions 已解析）')
     const uq = (uqCtx as unknown as { get(name: string): unknown }).get('userQuestions') as {
+      ask(request: unknown): Promise<unknown>
       askTimed(request: unknown, callId: string, timeoutMs: number): Promise<unknown>
       answer(agent: unknown, callId: string, answer: unknown): boolean
     } | undefined
@@ -476,6 +477,30 @@ const driver = new HarnessDriver(ctx, {
           try { void router?.pushToUser(t.kind, t.userId, feedback, { markdown: true }) } catch { /* 静默 */ }
         }
       })()
+    }
+    // P1.5 补充：宿主注册的 ask_user_question 工具 timeout=-1（无限等待），
+    // 走 ask() 路径而非 askTimed——ask() 的 request 不带 agent 对象，
+    // 从 agents.currentInitiator() 取调用链上的发起 Agent。
+    const agentsSvc = (ctx as unknown as { get(name: string): unknown }).get('agents') as { currentInitiator?: () => unknown } | undefined
+    const originalAsk = uq.ask.bind(uq)
+    uq.ask = (request: unknown): Promise<unknown> => {
+      const promise = originalAsk(request)
+      try {
+        const req = request as { questions?: QuestionItem[]; wait?: { callId?: string }; agent?: unknown }
+        const callId = req?.wait?.callId
+        const agentObj = req?.agent ?? agentsSvc?.currentInitiator?.()
+        const sessionId = (agentObj as { session?: { header?: { id?: string } } } | undefined)?.session?.header?.id
+        const questions = req?.questions
+        if (callId !== undefined && sessionId !== undefined && Array.isArray(questions) && questions.length === 1) {
+          const driverOwns = typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId)
+          if (driverOwns !== true) {
+            escalateConsoleQuestion({ sessionId, callId, questions: questions as QuestionItem[], agentObj, promise })
+          }
+        }
+      } catch (e) {
+        ctx.logger?.warn?.('[im-channel] 提问升级协程异常（忽略）:', e instanceof Error ? e.message : String(e))
+      }
+      return promise
     }
     const originalAskTimed = uq.askTimed.bind(uq)
     uq.askTimed = (request: unknown, callId: string, timeoutMs: number): Promise<unknown> => {

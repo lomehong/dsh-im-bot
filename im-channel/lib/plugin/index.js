@@ -474,6 +474,31 @@ export function apply(ctx, config) {
                 }
             })();
         };
+        // P1.5 补充：宿主注册的 ask_user_question 工具 timeout=-1（无限等待），
+        // 走 ask() 路径而非 askTimed——ask() 的 request 不带 agent 对象，
+        // 从 agents.currentInitiator() 取调用链上的发起 Agent。
+        const agentsSvc = ctx.get('agents');
+        const originalAsk = uq.ask.bind(uq);
+        uq.ask = (request) => {
+            const promise = originalAsk(request);
+            try {
+                const req = request;
+                const callId = req?.wait?.callId;
+                const agentObj = req?.agent ?? agentsSvc?.currentInitiator?.();
+                const sessionId = agentObj?.session?.header?.id;
+                const questions = req?.questions;
+                if (callId !== undefined && sessionId !== undefined && Array.isArray(questions) && questions.length === 1) {
+                    const driverOwns = typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId);
+                    if (driverOwns !== true) {
+                        escalateConsoleQuestion({ sessionId, callId, questions: questions, agentObj, promise });
+                    }
+                }
+            }
+            catch (e) {
+                ctx.logger?.warn?.('[im-channel] 提问升级协程异常（忽略）:', e instanceof Error ? e.message : String(e));
+            }
+            return promise;
+        };
         const originalAskTimed = uq.askTimed.bind(uq);
         uq.askTimed = (request, callId, timeoutMs) => {
             const promise = originalAskTimed(request, callId, timeoutMs);
