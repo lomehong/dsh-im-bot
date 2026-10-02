@@ -443,6 +443,9 @@ export class WecomChannel implements ImChannel {
   async sendApprovalCard(target: ReplyTarget, card: ApprovalCardRequest): Promise<boolean> {
     const client = this.client
     if (client === null || client === undefined) return false
+    // P1.5 任务审批卡（task-board 阻断式审批）：任务语义标题 + 批准/拒绝按钮；
+    // 按钮 key 复用 approve:/deny: 词汇（同一条 template_card_event 回传链路）。
+    const isTask = card.task !== undefined
     try {
       await client.sendMessage(target.targetId, {
         msgtype: 'template_card',
@@ -452,12 +455,18 @@ export class WecomChannel implements ImChannel {
           // 审批 token 天然唯一，直接复用。
           task_id: `imch_appr_${card.token}`,
           source: { desc: 'dsh 数字分身' },
-          main_title: { title: '工具执行审批', desc: `工具：${card.toolName}` },
-          sub_title_text: `触发：${card.guestLabel}${card.reason !== undefined && card.reason.length > 0 ? `
+          main_title: isTask
+            ? { title: `任务审批 ${card.task.taskId}`, desc: `级别：${card.task.level}` }
+            : { title: '工具执行审批', desc: `工具：${card.toolName}` },
+          sub_title_text: isTask
+            ? `${card.task.title}${card.task.summary.length > 0 ? `
+要点：${card.task.summary.slice(0, 120)}` : ''}
+请选择批准或拒绝（看板/控制台亦可处理）`
+            : `触发：${card.guestLabel}${card.reason !== undefined && card.reason.length > 0 ? `
 说明：${card.reason.slice(0, 120)}` : ''}
 请选择允许或拒绝（超时自动拒绝）`,
           button_list: [
-            { text: '允许', key: `approve:${card.token}`, style: 1 },
+            { text: isTask ? '批准' : '允许', key: `approve:${card.token}`, style: 1 },
             { text: '拒绝', key: `deny:${card.token}`, style: 2 },
           ],
         } as never,

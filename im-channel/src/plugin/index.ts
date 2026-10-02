@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // 纯类型导入：载入 @deepseek-ai/dsh-settings 对 Context 的 `.settings` 增补。
 import type {} from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
+import { TaskDecisionBridge } from './task-decision-bridge.ts'
 import { BindStore } from '../core/bind-store.ts'
 import { Router, type RouterStatus } from '../core/router.ts'
 import { DEFAULT_GUEST_COMMANDS } from '../core/guest-permissions.ts'
@@ -131,17 +132,28 @@ export function apply(ctx: Context, config: ImChannelSection): void {
         if (i >= 0) ownerReplyInterceptors.splice(i, 1)
       }
     },
-    /** P1.5 主人绑定的 IM 渠道清单（未脱敏——仅宿主侧插件内部推送用）。 */
+    /** P1.5 主人绑定的 IM 渠道清单（未脱敏——仅宿主侧插件内部推送用；
+     *  0.2.2 修复：collectBotStatus 会脱敏 userId，脱敏 id 推送不可达（生产已踩）。
+     *  改直读 BindStore ownerFor，且仅保留已记住推送目标（targetIdFor）的渠道。 */
     masterTargets(): Array<{ kind: 'feishu' | 'wechat' | 'wecom'; userId: string }> {
       const out: Array<{ kind: 'feishu' | 'wechat' | 'wecom'; userId: string }> = []
-      for (const bot of collectBotStatus(router?.channels)) {
-        for (const b of bot.bindings) {
-          if (b.isMaster === true && typeof b.userId === 'string' && b.userId !== '') {
-            out.push({ kind: bot.kind, userId: b.userId })
-          }
-        }
+      for (const kind of ['feishu', 'wechat', 'wecom'] as const) {
+        if (router?.channels.find(ch => ch.kind === kind) === undefined) continue
+        const owner = store.ownerFor(kind)
+        if (owner === undefined || owner.userId === '') continue
+        if (store.targetIdFor({ kind, userId: owner.userId as never }) === undefined) continue
+        out.push({ kind, userId: owner.userId })
       }
       return out
+    },
+    /** P1.5 任务决策卡（task-board 阻断式审批）：推送批准/拒绝按钮卡（文本兜底），
+     *  点击/回复任意一路即决；返回决策 promise（无超时 fail-closed）。 */
+    requestTaskApproval(info: { taskId: string; title: string; level: string; summary: string }): Promise<'approved' | 'rejected'> {
+      return taskBridge.request(info)
+    },
+    /** 决策已在别处完成（控制台/拦截器/主人会话）→ 撤销待决任务卡。 */
+    cancelTaskApproval(taskId: string): boolean {
+      return taskBridge.cancel(taskId)
     },
     /**
      * 按当前声明实例强制重建路由。用于「凭证后到」场景（登录/配置保存时
@@ -239,6 +251,38 @@ export function apply(ctx: Context, config: ImChannelSection): void {
     },
     line => { ctx.logger.info(`[im-channel] ${line}`) },
   )
+  // P1.5 任务决策桥（task-board 阻断式审批的按钮卡承接）：卡片走同一渠道
+  // 能力（sendApprovalCard 任务变体），点击走同一条 template_card_event 链路；
+  // 文本兜底由 task-board 的主人回复拦截器承接（同意/拒绝 TB-x）。
+  const taskBridge = new TaskDecisionBridge(
+    async (kind, ownerUserId, card) => {
+      const channel = channelOf(kind)
+      const target = ownerTargetOf(kind, ownerUserId)
+      if (channel === undefined || target === undefined || typeof channel.sendApprovalCard !== 'function') return false
+      const fn = channel.sendApprovalCard
+      try { return await fn.call(channel, target, card) } catch (error) {
+        ctx.logger?.warn?.(`[im-channel] 任务决策卡发送失败（${kind}）:`, error instanceof Error ? error.message : String(error))
+        return false
+      }
+    },
+    (kind, ownerUserId, body) => {
+      const r = router
+      if (r === undefined) return Promise.resolve(false)
+      return r.pushToUser(kind as 'feishu' | 'wechat' | 'wecom', ownerUserId, body, { markdown: true })
+    },
+    () => {
+      const out: Array<{ kind: string; userId: string }> = []
+      for (const kind of ['feishu', 'wechat', 'wecom'] as const) {
+        if (router?.channels.find(ch => ch.kind === kind) === undefined) continue
+        const owner = store.ownerFor(kind)
+        if (owner === undefined || owner.userId === '') continue
+        if (store.targetIdFor({ kind, userId: owner.userId as never }) === undefined) continue
+        out.push({ kind, userId: owner.userId })
+      }
+      return out
+    },
+    line => { try { ctx.logger.info(`[im-channel] ${line}`) } catch { /* ignore */ } },
+  )
   // 沿 parentSession 链向上找Owner会话（数字分身模型下访客的会话继承自分身）。
     // 用于审批/提问必须把卡片发到Owner本人，而不是发到触发它的访客。
     const ownerSessionOf = (agentId: string): string => {
@@ -277,7 +321,7 @@ export function apply(ctx: Context, config: ImChannelSection): void {
     undefined,
     line => { ctx.logger.info(`[im-channel] ${line}`) },
   )
-  const driver = new HarnessDriver(ctx, {
+const driver = new HarnessDriver(ctx, {
     mcpRegistry,
     guestTools: () => section.read().guestTools ?? [],
     agentPreset: () => section.read().agentPreset || undefined,
@@ -378,6 +422,9 @@ export function apply(ctx: Context, config: ImChannelSection): void {
         approval: {
           consumeOwnerReply: (kind, ownerUserId, messageText) => approvalBridge.consumeOwnerReply(kind, ownerUserId, messageText),
           resolveByToken: (kind, token, decision, userId, settleCard) => approvalBridge.resolveByToken(kind, token, decision, userId, settleCard),
+        },
+        taskApproval: {
+          resolveByToken: (kind, token, decision, userId, settleCard) => taskBridge.resolveByToken(kind, token, decision, userId, settleCard),
         },
         ownerReplyInterceptor: {
           consume: (kind: 'feishu' | 'wechat' | 'wecom', ownerUserId: string, messageText: string): boolean => {

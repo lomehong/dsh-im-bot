@@ -100,6 +100,8 @@ export interface ApprovalCardRequest {
   readonly guestLabel: string
   readonly toolName: string
   readonly reason: string | undefined
+  /** P1.5 任务审批卡（task-board 阻断式审批）：在场时渲染任务语义卡片（批准/拒绝）。 */
+  readonly task?: { taskId: string; title: string; level: string; summary: string }
 }
 
 /** One inbound image, decoded to bytes with a sniffed media type. */
