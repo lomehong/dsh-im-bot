@@ -109,6 +109,11 @@ export interface RouterDeps {
         consumeOwnerReply(kind: InboundMessage['from']['kind'], ownerUserId: string, text: string): boolean;
         resolveByToken(kind: InboundMessage['from']['kind'], token: string, decision: 'allow' | 'deny', userId: string, settleCard?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>): boolean;
     };
+    /** P1.5 通用主人回复拦截器（task-board 审批等跨插件语义）：在审批之后、
+     *  提问与命令之前消费；返回 true = 已消费，路由终止。缺席 = 无拦截。 */
+    readonly ownerReplyInterceptor?: {
+        consume(kind: InboundMessage['from']['kind'], ownerUserId: string, text: string): boolean;
+    };
     /** Token usage snapshot for /状态; absent hides the context line. */
     readonly usageOf?: (sessionId: string) => {
         totalTokens: number;

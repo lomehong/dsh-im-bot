@@ -106,6 +106,8 @@ export function apply(ctx: Context, config: ImChannelSection): void {
 
   let router: Router | undefined
   let disposeRouter: (() => void) | undefined
+  /** P1.5 通用主人回复拦截器（跨插件注册；路由重建共享同一数组引用）。 */
+  const ownerReplyInterceptors: Array<(kind: 'feishu' | 'wechat' | 'wecom', ownerUserId: string, text: string) => boolean> = []
   // 暴露 im-channel 服务：其他插件（如 yuyi）可主动推送消息到 IM 用户。
   // 路由在设置变更时会重建，服务通过闭包始终指向当前实例。
   ;(ctx as unknown as { provide: (name: string, value: unknown) => void }).provide('im-channel', {
@@ -120,6 +122,27 @@ export function apply(ctx: Context, config: ImChannelSection): void {
     },
     /** 三平台机器人状态汇总（控制台右缘状态栏数据源）。 */
     botsStatus: (): ImBotStatus[] => collectBotStatus(router?.channels),
+    /** P1.5 通用主人回复拦截器注册（task-board 审批等跨插件语义；回调异常按未消费处理）。
+     *  返回注销函数。 */
+    registerOwnerReplyInterceptor(fn: (kind: 'feishu' | 'wechat' | 'wecom', ownerUserId: string, text: string) => boolean): () => void {
+      ownerReplyInterceptors.push(fn)
+      return () => {
+        const i = ownerReplyInterceptors.indexOf(fn)
+        if (i >= 0) ownerReplyInterceptors.splice(i, 1)
+      }
+    },
+    /** P1.5 主人绑定的 IM 渠道清单（未脱敏——仅宿主侧插件内部推送用）。 */
+    masterTargets(): Array<{ kind: 'feishu' | 'wechat' | 'wecom'; userId: string }> {
+      const out: Array<{ kind: 'feishu' | 'wechat' | 'wecom'; userId: string }> = []
+      for (const bot of collectBotStatus(router?.channels)) {
+        for (const b of bot.bindings) {
+          if (b.isMaster === true && typeof b.userId === 'string' && b.userId !== '') {
+            out.push({ kind: bot.kind, userId: b.userId })
+          }
+        }
+      }
+      return out
+    },
     /**
      * 按当前声明实例强制重建路由。用于「凭证后到」场景（登录/配置保存时
      * 实例行已存在，settings 值不变不会触发 onChange）：冷启动的通道
@@ -355,6 +378,14 @@ export function apply(ctx: Context, config: ImChannelSection): void {
         approval: {
           consumeOwnerReply: (kind, ownerUserId, messageText) => approvalBridge.consumeOwnerReply(kind, ownerUserId, messageText),
           resolveByToken: (kind, token, decision, userId, settleCard) => approvalBridge.resolveByToken(kind, token, decision, userId, settleCard),
+        },
+        ownerReplyInterceptor: {
+          consume: (kind: 'feishu' | 'wechat' | 'wecom', ownerUserId: string, messageText: string): boolean => {
+            for (const fn of ownerReplyInterceptors) {
+              try { if (fn(kind, ownerUserId, messageText) === true) return true } catch (e) { ctx.logger?.warn?.('[im-channel] 回复拦截器异常（按未消费处理）:', e instanceof Error ? e.message : String(e)) }
+            }
+            return false
+          },
         },
         question: {
           consumeReply: (kind: 'feishu' | 'wechat' | 'wecom', userId: string, messageText: string, commandPrefix: string) => questionBridge.consumeReply(kind, userId, messageText, commandPrefix),

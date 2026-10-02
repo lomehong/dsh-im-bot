@@ -134,6 +134,14 @@ export class Router {
                     return;
                 }
             }
+            // P1.5 通用主人回复拦截器（task-board 审批等；在审批之后、提问之前）。
+            if (this.deps.ownerReplyInterceptor !== undefined) {
+                const interceptorOwner = this.deps.store.ownerFor?.(message.from.kind);
+                if (interceptorOwner !== undefined && interceptorOwner.userId === message.from.userId
+                    && this.deps.ownerReplyInterceptor.consume(message.from.kind, interceptorOwner.userId, message.text)) {
+                    return;
+                }
+            }
             // 提问回答消费：有未答问题时，非命令回复优先作为答案（在审批之后）。
             if (this.deps.question !== undefined && this.deps.question.consumeReply(message.from.kind, message.from.userId, message.text, this.commandPrefix)) {
                 return;
