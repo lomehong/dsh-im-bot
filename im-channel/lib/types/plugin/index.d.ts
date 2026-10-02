@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
+import type { ChannelKind } from '../core/channel.ts';
 export declare const name = "im-channel";
 export declare const inject: string[];
 export declare const provide: string[];

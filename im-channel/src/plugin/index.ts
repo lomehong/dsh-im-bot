@@ -20,6 +20,7 @@ import { answerForQuestion, QuestionBridge, questionText, type QuestionAnswer, t
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
+import type { ChannelKind } from '../core/channel.ts'
 import type { ImChannel } from '../core/index.ts'
 
 export const name = 'im-channel'
