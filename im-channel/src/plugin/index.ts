@@ -485,15 +485,23 @@ const driver = new HarnessDriver(ctx, {
     const originalAsk = uq.ask.bind(uq)
     uq.ask = (request: unknown): Promise<unknown> => {
       const promise = originalAsk(request)
+      const dbg = request as { questions?: unknown; wait?: { callId?: string }; agent?: unknown }
+      escDebug(`ask 包装触发: callId=${dbg?.wait?.callId ?? '无'} 有agent=${dbg?.agent !== undefined} 题数=${Array.isArray(dbg?.questions) ? dbg.questions.length : '非数组'}`)
       try {
         const req = request as { questions?: QuestionItem[]; wait?: { callId?: string }; agent?: unknown }
         const callId = req?.wait?.callId
         const agentObj = req?.agent ?? agentsSvc?.currentInitiator?.()
         const sessionId = (agentObj as { session?: { header?: { id?: string } } } | undefined)?.session?.header?.id
         const questions = req?.questions
-        if (callId !== undefined && sessionId !== undefined && Array.isArray(questions) && questions.length === 1) {
+        if (callId === undefined || sessionId === undefined || !Array.isArray(questions)) {
+          escDebug(`ask 跳过: callId=${callId === undefined ? '缺' : '有'} sessionId=${sessionId === undefined ? '缺' : sessionId.slice(0, 8)} 题数=${Array.isArray(questions) ? questions.length : '非数组'}`)
+        } else {
           const driverOwns = typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId)
-          if (driverOwns !== true) {
+          if (driverOwns === true) {
+            escDebug(`ask 跳过: driver 自有会话（IM 来源）`)
+          } else if (questions.length !== 1) {
+            escDebug(`ask 跳过: 多问题批次（${questions.length}）`)
+          } else {
             escalateConsoleQuestion({ sessionId, callId, questions: questions as QuestionItem[], agentObj, promise })
           }
         }
