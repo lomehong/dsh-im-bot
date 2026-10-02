@@ -1,4 +1,5 @@
 import z from '@deepseek-ai/schemastery';
+import { TaskDecisionBridge } from "./task-decision-bridge.js";
 import { BindStore } from "../core/bind-store.js";
 import { Router } from "../core/router.js";
 import { DEFAULT_GUEST_COMMANDS } from "../core/guest-permissions.js";
@@ -12,7 +13,7 @@ import { getEnabledMcpServers, serverEntryToConfig } from "../channels/mcp-serve
 import { LoginApi } from "./login-api.js";
 import { createSectionView } from "./section-view.js";
 import { ApprovalBridge } from "./approval-bridge.js";
-import { QuestionBridge } from "./question-bridge.js";
+import { answerForQuestion, QuestionBridge, questionText } from "./question-bridge.js";
 export const name = 'im-channel';
 export const inject = ['agents', 'tools'];
 export const provide = ['im-channel'];
@@ -99,17 +100,31 @@ export function apply(ctx, config) {
                     ownerReplyInterceptors.splice(i, 1);
             };
         },
-        /** P1.5 主人绑定的 IM 渠道清单（未脱敏——仅宿主侧插件内部推送用）。 */
+        /** P1.5 主人绑定的 IM 渠道清单（未脱敏——仅宿主侧插件内部推送用；
+         *  0.2.2 修复：collectBotStatus 会脱敏 userId，脱敏 id 推送不可达（生产已踩）。
+         *  改直读 BindStore ownerFor，且仅保留已记住推送目标（targetIdFor）的渠道。 */
         masterTargets() {
             const out = [];
-            for (const bot of collectBotStatus(router?.channels)) {
-                for (const b of bot.bindings) {
-                    if (b.isMaster === true && typeof b.userId === 'string' && b.userId !== '') {
-                        out.push({ kind: bot.kind, userId: b.userId });
-                    }
-                }
+            for (const kind of ['feishu', 'wechat', 'wecom']) {
+                if (router?.channels.find(ch => ch.kind === kind) === undefined)
+                    continue;
+                const owner = store.ownerFor(kind);
+                if (owner === undefined || owner.userId === '')
+                    continue;
+                if (store.targetIdFor({ kind, userId: owner.userId }) === undefined)
+                    continue;
+                out.push({ kind, userId: owner.userId });
             }
             return out;
+        },
+        /** P1.5 任务决策卡（task-board 阻断式审批）：推送批准/拒绝按钮卡（文本兜底），
+         *  点击/回复任意一路即决；返回决策 promise（无超时 fail-closed）。 */
+        requestTaskApproval(info) {
+            return taskBridge.request(info);
+        },
+        /** 决策已在别处完成（控制台/拦截器/主人会话）→ 撤销待决任务卡。 */
+        cancelTaskApproval(taskId) {
+            return taskBridge.cancel(taskId);
         },
         /**
          * 按当前声明实例强制重建路由。用于「凭证后到」场景（登录/配置保存时
@@ -192,7 +207,7 @@ export function apply(ctx, config) {
         const hasChannel = channel !== undefined;
         const hasSendApprovalCard = typeof channel?.sendApprovalCard === 'function';
         const hasTarget = target !== undefined;
-        log(`sendCard check: kind=${kind} hasChannel=${hasChannel} hasSendApprovalCard=${hasSendApprovalCard} target=${hasTarget}`);
+        ctx.logger?.info?.(`sendCard check: kind=${kind} hasChannel=${hasChannel} hasSendApprovalCard=${hasSendApprovalCard} target=${hasTarget}`);
         if (!hasChannel || !hasSendApprovalCard || !hasTarget)
             return false;
         // fn.call 绑定 channel 为 this：sendApprovalCard 是实例方法，裸引用
@@ -202,14 +217,52 @@ export function apply(ctx, config) {
             return false;
         try {
             const ok = await fn.call(channel, target, { ...card, reason: card.reason });
-            log(`sendCard result: kind=${kind} ok=${ok}`);
+            ctx.logger?.info?.(`sendCard result: kind=${kind} ok=${ok}`);
             return ok;
         }
         catch (error) {
-            log(`sendCard threw: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+            ctx.logger?.info?.(`sendCard threw: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
             return false;
         }
     }, line => { ctx.logger.info(`[im-channel] ${line}`); });
+    // P1.5 任务决策桥（task-board 阻断式审批的按钮卡承接）：卡片走同一渠道
+    // 能力（sendApprovalCard 任务变体），点击走同一条 template_card_event 链路；
+    // 文本兜底由 task-board 的主人回复拦截器承接（同意/拒绝 TB-x）。
+    const taskBridge = new TaskDecisionBridge(async (kind, ownerUserId, card) => {
+        const channel = channelOf(kind);
+        const target = ownerTargetOf(kind, ownerUserId);
+        if (channel === undefined || target === undefined || typeof channel.sendApprovalCard !== 'function')
+            return false;
+        const fn = channel.sendApprovalCard;
+        try {
+            return await fn.call(channel, target, card);
+        }
+        catch (error) {
+            ctx.logger?.warn?.(`[im-channel] 任务决策卡发送失败（${kind}）:`, error instanceof Error ? error.message : String(error));
+            return false;
+        }
+    }, (kind, ownerUserId, body) => {
+        const r = router;
+        if (r === undefined)
+            return Promise.resolve(false);
+        return r.pushToUser(kind, ownerUserId, body, { markdown: true });
+    }, () => {
+        const out = [];
+        for (const kind of ['feishu', 'wechat', 'wecom']) {
+            if (router?.channels.find(ch => ch.kind === kind) === undefined)
+                continue;
+            const owner = store.ownerFor(kind);
+            if (owner === undefined || owner.userId === '')
+                continue;
+            if (store.targetIdFor({ kind, userId: owner.userId }) === undefined)
+                continue;
+            out.push({ kind, userId: owner.userId });
+        }
+        return out;
+    }, line => { try {
+        ctx.logger.info(`[im-channel] ${line}`);
+    }
+    catch { /* ignore */ } });
     // 沿 parentSession 链向上找Owner会话（数字分身模型下访客的会话继承自分身）。
     // 用于审批/提问必须把卡片发到Owner本人，而不是发到触发它的访客。
     const ownerSessionOf = (agentId) => {
@@ -297,6 +350,142 @@ export function apply(ctx, config) {
     // the login HTTP API): the bound-session rows must survive router
     // rebuilds, and /bind hands out new sessions from it.
     const store = BindStore.shared;
+    // ── P1.5 控制台提问升级（主人拍板）：对话区问题卡（ask_user_question）在
+    // 主人不在电脑旁时升级企微（编号选项，回复即答案），答案经
+    // userQuestions.answer 回注原会话——会话解除阻塞继续跑。
+    // 拦截点：包装 userQuestions.askTimed（实例方法影子，「包装替换」先例），
+    // 捕获 (agent, callId, questions) 后委托原实现；仅控制台来源会话升级
+    // （driver 自有会话已有 questionBridge 全链路，跳过防双发）。
+    // 范围 v1：单问题批次（多问题批次走网页端）。
+    const consoleQuestionPending = new Map();
+    const samplePresence = () => {
+        try {
+            const mind = ctx.get('dsh-mind');
+            return mind?.presenceState?.();
+        }
+        catch {
+            return undefined;
+        }
+    };
+    const consoleMasterTargets = () => {
+        const out = [];
+        for (const kind of ['feishu', 'wechat', 'wecom']) {
+            if (router?.channels.find(ch => ch.kind === kind) === undefined)
+                continue;
+            const owner = store.ownerFor(kind);
+            if (owner === undefined || owner.userId === '')
+                continue;
+            if (store.targetIdFor({ kind, userId: owner.userId }) === undefined)
+                continue;
+            out.push({ kind, userId: owner.userId });
+        }
+        return out;
+    };
+    // 包装 userQuestions.askTimed（惰性注入：userQuestions 由 api-proxy 启动期提供）
+    ctx.inject(['userQuestions'], (uqCtx) => {
+        const uq = uqCtx.get('userQuestions');
+        if (uq === undefined || typeof uq.askTimed !== 'function' || typeof uq.answer !== 'function') {
+            ctx.logger?.info?.('[im-channel] userQuestions 服务不完整——控制台提问升级未启用');
+            return;
+        }
+        const escalateConsoleQuestion = (info) => {
+            void (async () => {
+                let unknownTries = 0;
+                for (;;) {
+                    const settled = await Promise.race([
+                        info.promise.then(() => true),
+                        new Promise(resolve => setTimeout(() => resolve(false), 60_000)),
+                    ]);
+                    if (settled)
+                        return;
+                    const ps = samplePresence();
+                    if (ps?.atComputer === true)
+                        continue;
+                    if (ps?.atComputer === false)
+                        break;
+                    unknownTries += 1;
+                    if (unknownTries >= 3) {
+                        ctx.logger?.info?.(`提问 ${info.callId}：在场信号不可用，放弃 IM 升级（控制台可答）`);
+                        return;
+                    }
+                    ctx.logger?.info?.(`提问 ${info.callId}：在场信号未知（${unknownTries}/3），10 分钟后重判`);
+                    await new Promise(resolve => setTimeout(resolve, 600_000));
+                }
+                const targets = consoleMasterTargets();
+                if (targets.length === 0)
+                    return;
+                const key = `${info.sessionId}:${info.callId}`;
+                let resolvePending = () => { };
+                const answerPromise = new Promise(resolve => { resolvePending = resolve; });
+                consoleQuestionPending.set(key, {
+                    sessionId: info.sessionId, callId: info.callId, questions: info.questions, agentObj: info.agentObj,
+                    ownerUserIds: targets.map(t => ({ kind: t.kind, userId: t.userId })), resolve: resolvePending,
+                });
+                const card = `${questionText(info.questions)}
+（直接回复选项编号或内容即作答；来自会话 ${info.sessionId.slice(0, 8)}…）`;
+                for (const t of targets) {
+                    try {
+                        void router?.pushToUser(t.kind, t.userId, card, { markdown: true });
+                    }
+                    catch { /* 单目标失败不阻断 */ }
+                }
+                const winner = await Promise.race([
+                    answerPromise.then(a => ({ source: 'im', answer: a })),
+                    info.promise.then(() => ({ source: 'web' })),
+                ]);
+                consoleQuestionPending.delete(key);
+                if (winner.source === 'web') {
+                    for (const t of targets) {
+                        try {
+                            void router?.pushToUser(t.kind, t.userId, 'ℹ️ 该问题已在控制台处理，企微答案忽略。', { markdown: true });
+                        }
+                        catch { /* 静默 */ }
+                    }
+                    return;
+                }
+                const ok = uq.answer(info.agentObj, info.callId, winner.answer);
+                const feedback = ok ? '✅ 已回答，会话继续运行。' : '❌ 回注失败：会话可能已更替——请在控制台重新提问。';
+                for (const t of targets) {
+                    try {
+                        void router?.pushToUser(t.kind, t.userId, feedback, { markdown: true });
+                    }
+                    catch { /* 静默 */ }
+                }
+            })();
+        };
+        const originalAskTimed = uq.askTimed.bind(uq);
+        uq.askTimed = (request, callId, timeoutMs) => {
+            const promise = originalAskTimed(request, callId, timeoutMs);
+            try {
+                const req = request;
+                const sessionId = req?.agent?.session?.header?.id;
+                const driverOwns = sessionId !== undefined && typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId);
+                if (sessionId !== undefined && driverOwns !== true && Array.isArray(req?.questions) && req.questions.length === 1) {
+                    escalateConsoleQuestion({ sessionId, callId, questions: req.questions, agentObj: req?.agent, promise });
+                }
+            }
+            catch (e) {
+                ctx.logger?.warn?.('[im-channel] 提问升级协程异常（忽略）:', e instanceof Error ? e.message : String(e));
+            }
+            return promise;
+        };
+        // 企微回复 → 解析答案 → resolve 待决升级（命令前缀不消费）
+        ownerReplyInterceptors.push((kind, ownerUserId, text) => {
+            const prefix = section.read().commandPrefix || '/';
+            if (text.startsWith(prefix))
+                return false;
+            for (const pending of consoleQuestionPending.values()) {
+                if (!pending.ownerUserIds.some(t => t.userId === ownerUserId))
+                    continue;
+                const answerItem = answerForQuestion(pending.questions[0], text);
+                consoleQuestionPending.delete(`${pending.sessionId}:${pending.callId}`);
+                pending.resolve({ answers: [answerItem] });
+                return true;
+            }
+            return false;
+        });
+        ctx.logger?.info?.('[im-channel] 控制台提问升级已启用（askTimed 包装 + 在场门控 + 离开沿触发；单问题批次）');
+    });
     /** Rebuild the router from the current declared instances: dispose the old one, then build channels for every credentialled enabled instance. */
     const rebuildRouter = () => {
         const next = section.read();
@@ -355,6 +544,9 @@ export function apply(ctx, config) {
             approval: {
                 consumeOwnerReply: (kind, ownerUserId, messageText) => approvalBridge.consumeOwnerReply(kind, ownerUserId, messageText),
                 resolveByToken: (kind, token, decision, userId, settleCard) => approvalBridge.resolveByToken(kind, token, decision, userId, settleCard),
+            },
+            taskApproval: {
+                resolveByToken: (kind, token, decision, userId, settleCard) => taskBridge.resolveByToken(kind, token, decision, userId, settleCard),
             },
             ownerReplyInterceptor: {
                 consume: (kind, ownerUserId, messageText) => {

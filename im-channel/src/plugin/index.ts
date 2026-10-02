@@ -16,7 +16,7 @@ import { getEnabledMcpServers, serverEntryToConfig } from '../channels/mcp-serve
 import { LoginApi } from './login-api.ts'
 import { createSectionView } from './section-view.ts'
 import { ApprovalBridge } from './approval-bridge.ts'
-import { QuestionBridge, type QuestionItem } from './question-bridge.ts'
+import { answerForQuestion, QuestionBridge, questionText, type QuestionAnswer, type QuestionItem } from './question-bridge.ts'
 import type { ChannelKind, ImChannel } from '../core/channel.ts'
 
 export const name = 'im-channel'
@@ -234,7 +234,7 @@ export function apply(ctx: Context, config: ImChannelSection): void {
       const hasChannel = channel !== undefined
       const hasSendApprovalCard = typeof channel?.sendApprovalCard === 'function'
       const hasTarget = target !== undefined
-      log(`sendCard check: kind=${kind} hasChannel=${hasChannel} hasSendApprovalCard=${hasSendApprovalCard} target=${hasTarget}`)
+       ctx.logger?.info?.(`sendCard check: kind=${kind} hasChannel=${hasChannel} hasSendApprovalCard=${hasSendApprovalCard} target=${hasTarget}`)
       if (!hasChannel || !hasSendApprovalCard || !hasTarget) return false
       // fn.call 绑定 channel 为 this：sendApprovalCard 是实例方法，裸引用
       // 调用会丢 this，方法体第一行 this.client 即 undefined（生产已踩）。
@@ -242,10 +242,10 @@ export function apply(ctx: Context, config: ImChannelSection): void {
       if (fn === undefined) return false
       try {
         const ok = await fn.call(channel, target, { ...card, reason: card.reason })
-        log(`sendCard result: kind=${kind} ok=${ok}`)
+         ctx.logger?.info?.(`sendCard result: kind=${kind} ok=${ok}`)
         return ok
       } catch (error) {
-        log(`sendCard threw: ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
+         ctx.logger?.info?.(`sendCard threw: ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
         return false
       }
     },
@@ -364,6 +364,132 @@ const driver = new HarnessDriver(ctx, {
   // the login HTTP API): the bound-session rows must survive router
   // rebuilds, and /bind hands out new sessions from it.
   const store = BindStore.shared
+
+  // ── P1.5 控制台提问升级（主人拍板）：对话区问题卡（ask_user_question）在
+  // 主人不在电脑旁时升级企微（编号选项，回复即答案），答案经
+  // userQuestions.answer 回注原会话——会话解除阻塞继续跑。
+  // 拦截点：包装 userQuestions.askTimed（实例方法影子，「包装替换」先例），
+  // 捕获 (agent, callId, questions) 后委托原实现；仅控制台来源会话升级
+  // （driver 自有会话已有 questionBridge 全链路，跳过防双发）。
+  // 范围 v1：单问题批次（多问题批次走网页端）。
+  const consoleQuestionPending = new Map<string, {
+    sessionId: string
+    callId: string
+    questions: QuestionItem[]
+    agentObj: unknown
+    ownerUserIds: Array<{ kind: string; userId: string }>
+    resolve: (answer: QuestionAnswer) => void
+  }>()
+  const samplePresence = (): { atComputer?: boolean; atComputerSource?: string } | undefined => {
+    try {
+      const mind = (ctx as unknown as { get(name: string): unknown }).get('dsh-mind') as { presenceState?: () => { atComputer?: boolean; atComputerSource?: string } } | undefined
+      return mind?.presenceState?.()
+    } catch { return undefined }
+  }
+  const consoleMasterTargets = (): Array<{ kind: 'feishu' | 'wechat' | 'wecom'; userId: string }> => {
+    const out: Array<{ kind: 'feishu' | 'wechat' | 'wecom'; userId: string }> = []
+    for (const kind of ['feishu', 'wechat', 'wecom'] as const) {
+      if (router?.channels.find(ch => ch.kind === kind) === undefined) continue
+      const owner = store.ownerFor(kind)
+      if (owner === undefined || owner.userId === '') continue
+      if (store.targetIdFor({ kind, userId: owner.userId as never }) === undefined) continue
+      out.push({ kind, userId: owner.userId })
+    }
+    return out
+  }
+
+  // 包装 userQuestions.askTimed（惰性注入：userQuestions 由 api-proxy 启动期提供）
+  ctx.inject(['userQuestions'], (uqCtx: Context) => {
+    const uq = (uqCtx as unknown as { get(name: string): unknown }).get('userQuestions') as {
+      askTimed(request: unknown, callId: string, timeoutMs: number): Promise<unknown>
+      answer(agent: unknown, callId: string, answer: unknown): boolean
+    } | undefined
+    if (uq === undefined || typeof uq.askTimed !== 'function' || typeof uq.answer !== 'function') {
+      ctx.logger?.info?.('[im-channel] userQuestions 服务不完整——控制台提问升级未启用')
+      return
+    }
+    const escalateConsoleQuestion = (info: { sessionId: string; callId: string; questions: QuestionItem[]; agentObj: unknown; promise: Promise<unknown> }): void => {
+      void (async () => {
+        let unknownTries = 0
+        for (;;) {
+          const settled = await Promise.race([
+            info.promise.then(() => true as const),
+            new Promise<false>(resolve => setTimeout(() => resolve(false), 60_000)),
+          ])
+          if (settled) return
+          const ps = samplePresence()
+          if (ps?.atComputer === true) continue
+          if (ps?.atComputer === false) break
+          unknownTries += 1
+          if (unknownTries >= 3) {
+             ctx.logger?.info?.(`提问 ${info.callId}：在场信号不可用，放弃 IM 升级（控制台可答）`)
+            return
+          }
+           ctx.logger?.info?.(`提问 ${info.callId}：在场信号未知（${unknownTries}/3），10 分钟后重判`)
+          await new Promise(resolve => setTimeout(resolve, 600_000))
+        }
+        const targets = consoleMasterTargets()
+        if (targets.length === 0) return
+        const key = `${info.sessionId}:${info.callId}`
+        let resolvePending: (answer: QuestionAnswer) => void = () => {}
+        const answerPromise = new Promise<QuestionAnswer>(resolve => { resolvePending = resolve })
+        consoleQuestionPending.set(key, {
+          sessionId: info.sessionId, callId: info.callId, questions: info.questions, agentObj: info.agentObj,
+          ownerUserIds: targets.map(t => ({ kind: t.kind, userId: t.userId })), resolve: resolvePending,
+        })
+        const card = `${questionText(info.questions)}
+（直接回复选项编号或内容即作答；来自会话 ${info.sessionId.slice(0, 8)}…）`
+        for (const t of targets) {
+          try { void router?.pushToUser(t.kind, t.userId, card, { markdown: true }) } catch { /* 单目标失败不阻断 */ }
+        }
+        const winner = await Promise.race([
+          answerPromise.then(a => ({ source: 'im' as const, answer: a })),
+          info.promise.then(() => ({ source: 'web' as const })),
+        ])
+        consoleQuestionPending.delete(key)
+        if (winner.source === 'web') {
+          for (const t of targets) {
+            try { void router?.pushToUser(t.kind, t.userId, 'ℹ️ 该问题已在控制台处理，企微答案忽略。', { markdown: true }) } catch { /* 静默 */ }
+          }
+          return
+        }
+        const ok = uq.answer(info.agentObj, info.callId, winner.answer)
+        const feedback = ok ? '✅ 已回答，会话继续运行。' : '❌ 回注失败：会话可能已更替——请在控制台重新提问。'
+        for (const t of targets) {
+          try { void router?.pushToUser(t.kind, t.userId, feedback, { markdown: true }) } catch { /* 静默 */ }
+        }
+      })()
+    }
+    const originalAskTimed = uq.askTimed.bind(uq)
+    uq.askTimed = (request: unknown, callId: string, timeoutMs: number): Promise<unknown> => {
+      const promise = originalAskTimed(request, callId, timeoutMs)
+      try {
+        const req = request as { agent?: { session?: { header?: { id?: string } } }; questions?: QuestionItem[] }
+        const sessionId = req?.agent?.session?.header?.id
+        const driverOwns = sessionId !== undefined && typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId)
+        if (sessionId !== undefined && driverOwns !== true && Array.isArray(req?.questions) && req.questions.length === 1) {
+          escalateConsoleQuestion({ sessionId, callId, questions: req.questions as QuestionItem[], agentObj: req?.agent, promise })
+        }
+      } catch (e) {
+        ctx.logger?.warn?.('[im-channel] 提问升级协程异常（忽略）:', e instanceof Error ? e.message : String(e))
+      }
+      return promise
+    }
+    // 企微回复 → 解析答案 → resolve 待决升级（命令前缀不消费）
+    ownerReplyInterceptors.push((kind, ownerUserId, text) => {
+      const prefix = section.read().commandPrefix || '/'
+      if (text.startsWith(prefix)) return false
+      for (const pending of consoleQuestionPending.values()) {
+        if (!pending.ownerUserIds.some(t => t.userId === ownerUserId)) continue
+        const answerItem = answerForQuestion(pending.questions[0], text)
+        consoleQuestionPending.delete(`${pending.sessionId}:${pending.callId}`)
+        pending.resolve({ answers: [answerItem] })
+        return true
+      }
+      return false
+    })
+    ctx.logger?.info?.('[im-channel] 控制台提问升级已启用（askTimed 包装 + 在场门控 + 离开沿触发；单问题批次）')
+  })
 
   /** Rebuild the router from the current declared instances: dispose the old one, then build channels for every credentialled enabled instance. */
   const rebuildRouter = (): void => {

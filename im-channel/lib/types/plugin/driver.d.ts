@@ -55,6 +55,9 @@ export declare class HarnessDriver implements AgentDriver {
          *  由 dsh-memory.assemblePack 注入相关记忆包（带审计回执）。 */
         memoryAssemblePerTurn?: () => boolean;
     });
+    /** P1.5 会话归属判定（控制台提问升级用）：该会话是否由本 driver 拥有
+     *  （IM 来源——已有 questionBridge 全链路，升级器必须跳过防双发）。 */
+    ownsSession(sessionId: string): boolean;
     startSession(options?: SessionOptions): Promise<string>;
     /** Whether this driver currently owns a live agent for the session id. */
     has(sessionId: string): boolean;

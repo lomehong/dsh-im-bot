@@ -249,6 +249,12 @@ export class HarnessDriver implements AgentDriver {
     })
   }
 
+  /** P1.5 会话归属判定（控制台提问升级用）：该会话是否由本 driver 拥有
+   *  （IM 来源——已有 questionBridge 全链路，升级器必须跳过防双发）。 */
+  ownsSession(sessionId: string): boolean {
+    return this.owned.has(sessionId)
+  }
+
   async startSession(options: SessionOptions = {}): Promise<string> {
     const cwd = normalizeCwd(options.cwd ?? this.options.cwd ?? process.cwd())
     const sessionId = SessionId(`session-${crypto.randomUUID()}`)

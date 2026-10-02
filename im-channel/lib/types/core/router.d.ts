@@ -114,6 +114,10 @@ export interface RouterDeps {
     readonly ownerReplyInterceptor?: {
         consume(kind: InboundMessage['from']['kind'], ownerUserId: string, text: string): boolean;
     };
+    /** P1.5 任务决策桥（task-board 审批卡按钮点击；在 approval 之后咨询）。 */
+    readonly taskApproval?: {
+        resolveByToken(kind: InboundMessage['from']['kind'], token: string, decision: 'allow' | 'deny', userId: string, settleCard?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>): boolean;
+    };
     /** Token usage snapshot for /状态; absent hides the context line. */
     readonly usageOf?: (sessionId: string) => {
         totalTokens: number;

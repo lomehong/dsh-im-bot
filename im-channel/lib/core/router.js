@@ -54,7 +54,10 @@ export class Router {
             });
             channel.onApprovalAction?.(action => {
                 const consumed = this.deps.approval?.resolveByToken(action.kind, action.token, action.decision, action.userId, action.settleCard) ?? false;
-                if (!consumed)
+                if (consumed)
+                    return;
+                const taskConsumed = this.deps.taskApproval?.resolveByToken(action.kind, action.token, action.decision, action.userId, action.settleCard) ?? false;
+                if (!taskConsumed)
                     this.log(`[im-channel] ${channel.label} 审批按钮未匹配待决请求（token=${action.token}），忽略`);
             });
             try {
