@@ -14,6 +14,9 @@ import { LoginApi } from "./login-api.js";
 import { createSectionView } from "./section-view.js";
 import { ApprovalBridge } from "./approval-bridge.js";
 import { answerForQuestion, QuestionBridge, questionText } from "./question-bridge.js";
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 export const name = 'im-channel';
 export const inject = ['agents', 'tools'];
 export const provide = ['im-channel'];
@@ -357,6 +360,16 @@ export function apply(ctx, config) {
     // 捕获 (agent, callId, questions) 后委托原实现；仅控制台来源会话升级
     // （driver 自有会话已有 questionBridge 全链路，跳过防双发）。
     // 范围 v1：单问题批次（多问题批次走网页端）。
+    /** P1.5 升级链文件级诊断（每个决策点落盘；定位断点用）。 */
+    const escDebug = (line) => {
+        try {
+            const homeDir = process.env.DSH_HOME ?? join(homedir(), '.dsh');
+            const file = join(homeDir, 'im-channel', 'escalation-debug.log');
+            mkdirSync(dirname(file), { recursive: true });
+            appendFileSync(file, `${new Date().toISOString()} ${line}` + '\n', 'utf8');
+        }
+        catch { /* 诊断静默 */ }
+    };
     const consoleQuestionPending = new Map();
     const samplePresence = () => {
         try {
@@ -383,12 +396,15 @@ export function apply(ctx, config) {
     };
     // 包装 userQuestions.askTimed（惰性注入：userQuestions 由 api-proxy 启动期提供）
     ctx.inject(['userQuestions'], (uqCtx) => {
+        escDebug('inject 回调触发（userQuestions 已解析）');
         const uq = uqCtx.get('userQuestions');
         if (uq === undefined || typeof uq.askTimed !== 'function' || typeof uq.answer !== 'function') {
+            escDebug('userQuestions 不完整/未提供——升级未启用');
             ctx.logger?.info?.('[im-channel] userQuestions 服务不完整——控制台提问升级未启用');
             return;
         }
         const escalateConsoleQuestion = (info) => {
+            escDebug(`提问捕获: session=${info.sessionId.slice(0, 10)}… callId=${info.callId} 题数=${info.questions.length}`);
             void (async () => {
                 let unknownTries = 0;
                 for (;;) {
@@ -396,11 +412,15 @@ export function apply(ctx, config) {
                         info.promise.then(() => true),
                         new Promise(resolve => setTimeout(() => resolve(false), 60_000)),
                     ]);
-                    if (settled)
+                    if (settled) {
+                        escDebug(`提问 ${info.callId}: 已在别处回答，升级收尾`);
                         return;
+                    }
                     const ps = samplePresence();
-                    if (ps?.atComputer === true)
+                    if (ps?.atComputer === true) {
+                        escDebug(`提问 ${info.callId}: 主人在场，60s 重查`);
                         continue;
+                    }
                     if (ps?.atComputer === false)
                         break;
                     unknownTries += 1;
@@ -412,6 +432,7 @@ export function apply(ctx, config) {
                     await new Promise(resolve => setTimeout(resolve, 600_000));
                 }
                 const targets = consoleMasterTargets();
+                escDebug(`提问 ${info.callId}: atComputer=false 触发升级，masterTargets=${targets.length}`);
                 if (targets.length === 0)
                     return;
                 const key = `${info.sessionId}:${info.callId}`;
@@ -469,6 +490,7 @@ export function apply(ctx, config) {
             }
             return promise;
         };
+        escDebug('askTimed 包装已安装（askTimed/answer 均可用）');
         // 企微回复 → 解析答案 → resolve 待决升级（命令前缀不消费）
         ownerReplyInterceptors.push((kind, ownerUserId, text) => {
             const prefix = section.read().commandPrefix || '/';
@@ -477,6 +499,7 @@ export function apply(ctx, config) {
             for (const pending of consoleQuestionPending.values()) {
                 if (!pending.ownerUserIds.some(t => t.userId === ownerUserId))
                     continue;
+                escDebug(`拦截器命中提问答案: owner=${ownerUserId.slice(0, 8)}… text=${text.slice(0, 24)}`);
                 const answerItem = answerForQuestion(pending.questions[0], text);
                 consoleQuestionPending.delete(`${pending.sessionId}:${pending.callId}`);
                 pending.resolve({ answers: [answerItem] });
