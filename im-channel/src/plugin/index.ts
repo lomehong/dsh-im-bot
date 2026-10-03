@@ -510,12 +510,14 @@ const driver = new HarnessDriver(ctx, {
       const sessionId = (agentObj as { session?: { header?: { id?: string } } } | undefined)?.session?.header?.id
       const single = Array.isArray(req?.questions) && req.questions.length === 1
       const driverOwned = sessionId !== undefined && typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId)
-      if (sessionId === undefined || !single || driverOwned || agentObj === undefined) return originalAsk(request)
+      escDebug(`ask 触发: sessionId=${sessionId === undefined ? '无' : sessionId.slice(0, 10)}… single=${single} driverOwned=${driverOwned} agent=${agentObj !== undefined}`)
+      if (sessionId === undefined) { escDebug('跳过: 无法定位会话'); return originalAsk(request) }
       const elsewhere = samplePresence(sessionId)?.engagedElsewhere === true
-      if (!elsewhere) return originalAsk(request)
+      escDebug(`门控: 别处有对话=${elsewhere}`)
+      if (!elsewhere) { escDebug('跳过: 主人不在别处被服务（按主人在场处理，控制台作答）'); return originalAsk(request) }
       const questions = req.questions as QuestionItem[]
       const targets = consoleMasterTargets()
-      if (targets.length === 0) return originalAsk(request)
+      if (targets.length === 0) { escDebug('跳过: masterTargets 为空'); return originalAsk(request) }
       const q = questions[0]
       const optionLines = (q.options ?? []).map((o, i) => `${i + 1}. ${o.label}${o.description !== undefined && o.description !== '' ? `（${o.description}）` : ''}`)
       const card = `❓ ${q.question}${q.detail !== undefined && q.detail !== '' ? `\n${q.detail}` : ''}
