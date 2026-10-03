@@ -542,6 +542,9 @@ ${optionLines.join('\n')}
       const idx = pendingConsoleAsks.findIndex(p => p.resolve === resolveAsk)
       if (idx >= 0) pendingConsoleAsks.splice(idx, 1)
       escDebug(`企微答案已回: 题目=${q.id} 选项=${answer.answers[0]?.selected.join('/') ?? ''} 自由文本=${answer.answers[0]?.custom ?? '无'}`)
+      for (const t of targets) {
+        try { void router?.pushToUser(t.kind, t.userId, '✅ 已收到你的回答，会话已继续。', { markdown: true }) } catch { /* 静默 */ }
+      }
       return { answers: questions.map(qq => qq.id === q.id ? answer.answers[0] : { id: qq.id, selected: [], custom: '' }) }
     }
     // P1.5：askTimed 保持原样（源头上升级直接调用它；不再单独包装——旧包装
