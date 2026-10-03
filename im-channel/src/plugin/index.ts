@@ -416,9 +416,9 @@ const driver = new HarnessDriver(ctx, {
   /** P1.5 门控信号 v2（遥测实证：控制台活跃信号有未知自刷新源，弃用）：
    *  engagedElsewhere = 排除提问会话自身后仍有其他 master-facing 会话在被服务
    *  （纯 session/list，dsh-mind 0.10.17+；旧版 mind → undefined=信号缺席）。 */
-  const samplePresence = (excludeSessionId?: string): { engagedElsewhere?: boolean } | undefined => {
+  const samplePresence = (excludeSessionId?: string): { atComputer?: boolean; atComputerSource?: string; engagedElsewhere?: boolean } | undefined => {
     try {
-      const mind = (ctx as unknown as { get(name: string): unknown }).get('dsh-mind') as { presenceState?: (o?: { excludeSessionId?: string }) => { engagedElsewhere?: boolean } } | undefined
+      const mind = (ctx as unknown as { get(name: string): unknown }).get('dsh-mind') as { presenceState?: (o?: { excludeSessionId?: string }) => { atComputer?: boolean; atComputerSource?: string; engagedElsewhere?: boolean } } | undefined
       return mind?.presenceState?.({ ...(excludeSessionId !== undefined ? { excludeSessionId } : {}) })
     } catch { return undefined }
   }
