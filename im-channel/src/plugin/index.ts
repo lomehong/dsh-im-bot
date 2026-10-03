@@ -523,11 +523,11 @@ ${optionLines.join('\n')}
 （主人不在电脑旁——直接回复编号或选项文字即作答；10 分钟内未回复本次提问将取消）`
       escDebug(`拦截 ask 升级企微: session=${sessionId.slice(0, 10)}… 题数=1`)
       const ownerUserIds = targets.map(t => ({ kind: t.kind, userId: t.userId }))
+      let resolveAsk!: (answer: QuestionAnswer) => void
       pendingConsoleAsks.push({ ownerUserIds, questions, resolve: resolveAsk })
       for (const t of targets) {
         try { void router?.pushToUser(t.kind, t.userId, card, { markdown: true }) } catch { /* 单目标失败不阻断 */ }
       }
-      let resolveAsk!: (answer: QuestionAnswer) => void
       const answer = await new Promise<QuestionAnswer>((resolve, reject) => {
         resolveAsk = resolve
         setTimeout(() => reject(new Error('企微 10 分钟未回复，本次提问已取消——请稍后重新发起')), 600_000).unref?.()
