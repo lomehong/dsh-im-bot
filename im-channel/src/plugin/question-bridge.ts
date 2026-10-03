@@ -156,10 +156,11 @@ export class QuestionBridge {
       this.pending.set(key, pending)
       // P1.5 卡片形态：useCard 且通道支持 → 文字（完整选项清单，保证可读）
       // + 选项按钮卡（点击承载）；否则仅文本编号卡。
-      const pushQuestion = opts?.useCard === true && this.sendQuestionCard !== undefined
+      const cardSender = this.sendQuestionCard
+      const pushQuestion = opts?.useCard === true && cardSender !== undefined
         ? this.notify(kind, userId, questionText(questions)).then(async ok => {
           if (!ok) return false
-          return await this.sendQuestionCard(kind, userId, {
+          return await cardSender(kind, userId, {
             token: opts.buttonToken ?? '',
             guestLabel: '',
             toolName: '',
