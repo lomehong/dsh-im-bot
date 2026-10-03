@@ -541,7 +541,12 @@ ${optionLines.join('\n')}
             }
             const answer = await new Promise((resolve, reject) => {
                 resolveAsk = resolve;
-                setTimeout(() => reject(new Error('企微 10 分钟未回复，本次提问已取消——请稍后重新发起')), 600_000).unref?.();
+                setTimeout(() => {
+                    const idx = pendingConsoleAsks.findIndex(p => p.resolve === resolveAsk);
+                    if (idx >= 0)
+                        pendingConsoleAsks.splice(idx, 1);
+                    reject(new Error('企微 10 分钟未回复，本次提问已取消——请稍后重新发起'));
+                }, 600_000).unref?.();
             });
             const idx = pendingConsoleAsks.findIndex(p => p.resolve === resolveAsk);
             if (idx >= 0)
