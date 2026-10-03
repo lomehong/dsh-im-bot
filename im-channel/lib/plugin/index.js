@@ -486,100 +486,92 @@ export function apply(ctx, config) {
         // callId，无法被外部回注——正解是「源头升级」：主人不在电脑旁时，包装器
         // 把控制台提问改调 askTimed（10 分钟限时 + 升级器自造 callId），企微答案
         // 经 userQuestions.answer(自造 callId) 回注——宿主设计内的合法路径。
+        // P1.5 正解（调研定稿 v2）：untimed ask 放行原实现（控制台问题卡照常渲染，
+        // 由 web 答案器 stage 持有）；升级器从 sessionProjections 轮询捕获本次提问
+        // 的 callId，推企微编号选项卡；企微答案经 userQuestions.answer(agent,
+        // callId, answer) 回注——与网页点选完全同构（网页端就是这么答的）。
+        // 在场门控 v3：engagedElsewhere（排除提问会话自身的纯 session/list 信号，
+        // 不受控制台活跃信号未知自刷新源影响）——别处有对话 → 不打扰。
+        // IM 来源会话跳过（已有 questionBridge 全链路）。
         uq.ask = async (request) => {
             const req = request;
-            // P1.5 关键守卫：askTimed 内部会回调 this.ask（wait.timed=true）——不跳过
-            // 则与源头上升级互相递归 → 栈溢出（2026-10-03 生产复现：单秒数千层）。
-            if (req?.wait?.timed === true)
-                return originalAsk(request);
             const agentObj = req?.agent ?? agentsSvc?.currentInitiator?.();
             const sessionId = agentObj?.session?.header?.id;
             const single = Array.isArray(req?.questions) && req.questions.length === 1;
+            const projSession = agentObj;
             const driverOwned = sessionId !== undefined && typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId);
-            if (sessionId === undefined) {
-                escDebug('ask 跳过: 无法定位会话（无 agent）');
+            if (sessionId === undefined || !single || driverOwned || agentObj === undefined)
                 return originalAsk(request);
-            }
             const elsewhere = samplePresence(sessionId)?.engagedElsewhere === true;
-            escDebug(`ask 触发: 别处有对话=${elsewhere} 单问题=${single} driverOwned=${driverOwned} 有agent=${agentObj !== undefined}`);
-            if (!single || driverOwned || elsewhere || agentObj === undefined)
+            escDebug(`ask 触发: 别处有对话=${elsewhere} 单问题=${single} driverOwned=${driverOwned}`);
+            if (elsewhere)
                 return originalAsk(request);
-            const callId = `esc_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-            escDebug(`ask 源头升级: callId=${callId} 限时 10 分钟`);
             const questions = req.questions;
             const targets = consoleMasterTargets();
             if (targets.length === 0) {
-                escDebug('masterTargets 为空——回退 untimed ask');
+                escDebug('masterTargets 为空——不升级');
                 return originalAsk(request);
             }
-            const askTimedPromise = uq.askTimed({ ...req, agent: agentObj }, callId, 10 * 60 * 1000);
+            const askPromise = originalAsk(request);
+            // 从 sessionProjections 轮询捕获本次提问的 callId（tool/call 事件入投影）
+            let callId;
+            for (let i = 0; i < 20; i++) {
+                await new Promise(resolve => setTimeout(resolve, 250));
+                try {
+                    const proj = ctx.get('sessionProjections');
+                    const view = proj?.stateOf?.(projSession?.session, 'userQuestions');
+                    const open = (view?.questions?.active ?? []).filter(q => q.state === 'open' || q.state === 'continued');
+                    if (open.length > 0) {
+                        callId = open[open.length - 1].callId;
+                        break;
+                    }
+                }
+                catch { /* 单次轮询失败重试 */ }
+            }
+            if (callId === undefined) {
+                escDebug('未能从投影捕获 callId——放行原 ask（不升级）');
+                return askPromise;
+            }
+            escDebug(`callId 捕获: ${callId}——推送企微编号选项卡`);
             let resolveAnswer = () => { };
             const answerPromise = new Promise(resolve => { resolveAnswer = resolve; });
-            const sessId = sessionId;
-            consoleQuestionPending.set(`${sessId}:${callId}`, {
-                sessionId: sessId, callId, questions, agentObj,
+            consoleQuestionPending.set(`${sessionId}:${callId}`, {
+                sessionId, callId, questions, agentObj,
                 ownerUserIds: targets.map(t => ({ kind: t.kind, userId: t.userId })), resolve: resolveAnswer,
             });
             const card = `${questionText(questions)}
-（主人不在电脑旁——直接回复选项编号或内容即作答；来自会话 ${(sessionId ?? '').slice(0, 8)}…）`;
+（主人不在电脑旁——直接回复选项编号或内容即作答）`;
             for (const t of targets) {
                 try {
                     void router?.pushToUser(t.kind, t.userId, card, { markdown: true });
                 }
                 catch { /* 单目标失败不阻断 */ }
             }
+            // 竞速：企微答案 vs 控制台/网页答案（askPromise 自行解决）
             const winner = await Promise.race([
                 answerPromise.then(a => ({ source: 'im', answer: a })),
-                askTimedPromise.then(() => ({ source: 'web-or-timeout' })),
+                askPromise.then(() => ({ source: 'console' })),
             ]);
             consoleQuestionPending.delete(`${sessionId}:${callId}`);
             if (winner.source === 'im') {
-                // P1.5 最后一公里（调研定稿）：源头升级的问题由 web 答案器 stage 持有
-                // （waterfall 接力），不在 continued(agent) 清单——uq.answer 无法回注。
-                // 改走 session/prompt 队列注入（复用 task-board 投递线型）：企微答案
-                // 作为用户消息进入原会话，ask 10 分钟超时挂起后模型即可见，会话以
-                // 企微答案继续。
-                const gw = ctx.get('typertGateway');
-                let injected = false;
-                if (gw !== undefined) {
-                    try {
-                        const answerText = winner.answer.answers
-                            .map(a => [...a.selected, a.custom ?? ''].filter(s => s !== '').join(' '))
-                            .filter(s => s !== '').join('；');
-                        await gw.invoke({
-                            namespace: 'session',
-                            method: 'prompt',
-                            args: { request: {
-                                    sessionId: sessionId,
-                                    requestId: `im-channel-answer-${Date.now()}`,
-                                    mode: 'queue',
-                                    content: [{ type: 'text', text: `（企微回答）${answerText}` }],
-                                } },
-                        });
-                        injected = true;
-                    }
-                    catch (e) {
-                        ctx.logger?.warn?.('[im-channel] 答案注入失败（会话可能已更替）:', e instanceof Error ? e.message : String(e));
-                    }
+                // 企微答案 → userQuestions.answer（与网页点选完全同构）→ 原问解除
+                let ok = false;
+                try {
+                    ok = uq.answer(agentObj, callId, winner.answer) === true;
                 }
-                const feedback = injected
-                    ? '✅ 回答已转交会话（问题挂起超时后由会话继续处理）。'
-                    : '❌ 答案转交失败——请在控制台重新提问。';
+                catch (e) {
+                    escDebug(`answer 异常: ${e instanceof Error ? e.message : String(e)}`);
+                }
+                escDebug(`answer 回注: ok=${ok}`);
+                const feedback = ok ? '✅ 回答已注入会话，会话继续。' : '❌ 回注失败——请在控制台重新提问。';
                 for (const t of targets) {
                     try {
                         void router?.pushToUser(t.kind, t.userId, feedback, { markdown: true });
                     }
                     catch { /* 静默 */ }
                 }
-                return askTimedPromise;
             }
-            for (const t of targets) {
-                try {
-                    void router?.pushToUser(t.kind, t.userId, 'ℹ️ 该问题已在控制台处理或已超时挂起。', { markdown: true });
-                }
-                catch { /* 静默 */ }
-            }
-            return askTimedPromise;
+            return askPromise;
         };
         // P1.5：askTimed 保持原样（源头上升级直接调用它；不再单独包装——旧包装
         // 会与 ask 包装叠加成双升级）。askTimed 内部的 this.ask 回调由 ask 包装
