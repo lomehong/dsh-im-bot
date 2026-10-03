@@ -140,6 +140,9 @@ export class QuestionBridge {
             const pushQuestion = opts?.useCard === true && this.sendQuestionCard !== undefined
                 ? this.sendQuestionCard(kind, userId, {
                     token: opts.buttonToken ?? '',
+                    guestLabel: '',
+                    toolName: '',
+                    reason: undefined,
                     question: { callId: questions[0]?.id ?? '', question: questions[0]?.question ?? '', ...(questions[0]?.detail !== undefined ? { detail: questions[0].detail } : {}), options: questions[0]?.options ?? [] },
                 })
                 : this.notify(kind, userId, questionText(questions));

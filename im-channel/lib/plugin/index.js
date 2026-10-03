@@ -538,7 +538,8 @@ export function apply(ctx, config) {
                 return originalAsk(request);
             }
             escDebug(`ask 升级企微问答桥: session=${sessionId.slice(0, 10)}… 题数=1`);
-            const answer = await questionBridge.ask('wecom', owner.userId, questions);
+            const buttonToken = `q_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+            const answer = await questionBridge.ask('wecom', owner.userId, questions, { buttonToken, useCard: true });
             escDebug(`企微答案已回: ${answer.answers.map(a => [...a.selected, a.custom ?? ''].join('/')).join('；')}`);
             return answer;
         };

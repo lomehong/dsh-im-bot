@@ -114,7 +114,7 @@ export class QuestionBridge {
     private readonly cancel: (kind: string, userId: string) => boolean = () => false,
     private readonly log: (line: string) => void = () => {},
     /** P1.5 选项按钮卡发送钩子（提问升级的卡片形态；缺省=文本卡）。 */
-    private readonly sendQuestionCard?: (kind: string, userId: string, card: { token: string; question: { callId: string; question: string; detail?: string; options: Array<{ label: string; description?: string }> } }) => Promise<boolean>,
+    private readonly sendQuestionCard?: (kind: string, userId: string, card: import('../core/channel.ts').ApprovalCardRequest) => Promise<boolean>,
   ) {}
 
   hasPendingFor(kind: string, userId: string): boolean {
@@ -158,6 +158,9 @@ export class QuestionBridge {
       const pushQuestion = opts?.useCard === true && this.sendQuestionCard !== undefined
         ? this.sendQuestionCard(kind, userId, {
           token: opts.buttonToken ?? '',
+          guestLabel: '',
+          toolName: '',
+          reason: undefined,
           question: { callId: questions[0]?.id ?? '', question: questions[0]?.question ?? '', ...(questions[0]?.detail !== undefined ? { detail: questions[0].detail } : {}), options: questions[0]?.options ?? [] },
         })
         : this.notify(kind, userId, questionText(questions))
