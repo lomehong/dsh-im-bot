@@ -491,7 +491,10 @@ const driver = new HarnessDriver(ctx, {
     // 把控制台提问改调 askTimed（10 分钟限时 + 升级器自造 callId），企微答案
     // 经 userQuestions.answer(自造 callId) 回注——宿主设计内的合法路径。
     uq.ask = async (request: unknown): Promise<unknown> => {
-      const req = request as { questions?: QuestionItem[]; agent?: unknown; signal?: AbortSignal }
+      const req = request as { questions?: QuestionItem[]; agent?: unknown; signal?: AbortSignal; wait?: { timed?: boolean } }
+      // P1.5 关键守卫：askTimed 内部会回调 this.ask（wait.timed=true）——不跳过
+      // 则与源头上升级互相递归 → 栈溢出（2026-10-03 生产复现：单秒数千层）。
+      if (req?.wait?.timed === true) return originalAsk(request)
       const agentObj = req?.agent ?? agentsSvc?.currentInitiator?.()
       const sessionId = (agentObj as { session?: { header?: { id?: string } } } | undefined)?.session?.header?.id
       const single = Array.isArray(req?.questions) && req.questions.length === 1
@@ -537,22 +540,10 @@ const driver = new HarnessDriver(ctx, {
       for (const t of targets) { try { void router?.pushToUser(t.kind, t.userId, 'ℹ️ 该问题已在控制台处理或已超时挂起。', { markdown: true }) } catch { /* 静默 */ } }
       return askTimedPromise
     }
-    const originalAskTimed = uq.askTimed.bind(uq)
-    uq.askTimed = (request: unknown, callId: string, timeoutMs: number): Promise<unknown> => {
-      const promise = originalAskTimed(request, callId, timeoutMs)
-      try {
-        const req = request as { agent?: { session?: { header?: { id?: string } } }; questions?: QuestionItem[] }
-        const sessionId = req?.agent?.session?.header?.id
-        const driverOwns = sessionId !== undefined && typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId)
-        if (sessionId !== undefined && driverOwns !== true && Array.isArray(req?.questions) && req.questions.length === 1) {
-          escalateConsoleQuestion({ sessionId, callId, questions: req.questions as QuestionItem[], agentObj: req?.agent, promise })
-        }
-      } catch (e) {
-        ctx.logger?.warn?.('[im-channel] 提问升级协程异常（忽略）:', e instanceof Error ? e.message : String(e))
-      }
-      return promise
-    }
-    escDebug('askTimed 包装已安装（askTimed/answer 均可用）')
+    // P1.5：askTimed 保持原样（源头上升级直接调用它；不再单独包装——旧包装
+    // 会与 ask 包装叠加成双升级）。askTimed 内部的 this.ask 回调由 ask 包装
+    // 的 wait.timed 守卫委托 originalAsk，无递归。
+    escDebug('ask 包装已安装（ask/answer 可用；askTimed 保持原样）')
     // 企微回复 → 解析答案 → resolve 待决升级（命令前缀不消费）
     ownerReplyInterceptors.push((kind, ownerUserId, text) => {
       const prefix = section.read().commandPrefix || '/'
