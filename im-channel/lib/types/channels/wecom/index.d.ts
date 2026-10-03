@@ -99,6 +99,8 @@ export declare class WecomChannel implements ImChannel {
     /** 发送 button_interaction 模板卡片（允许/拒绝），事件经同连接回传。 */
     sendApprovalCard(target: ReplyTarget, card: ApprovalCardRequest): Promise<boolean>;
     onApprovalAction(handler: (action: ApprovalAction) => void): void;
+    /** P1.5 提问卡主动定稿（文字回答/超时/新问替换路径）：按 token 更新卡片为已定稿形态。 */
+    settleQuestionCard(token: string, outcome: 'allowed' | 'rejected' | 'timeout'): Promise<boolean>;
     send(target: ReplyTarget, message: OutboundMessage): Promise<void>;
     /**
      * 打开流式回合：使用 replyStream 实现打字机效果

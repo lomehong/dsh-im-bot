@@ -43,12 +43,15 @@ export declare class QuestionBridge {
     private readonly notify;
     private readonly cancel;
     private readonly log;
-    /** P1.5 选项按钮卡发送钩子（提问升级的卡片形态；缺省=文本卡）。 */
+    /** P1.5 选项按钮卡发送钩子（提问升级的卡片形态；返回主动定稿闭包供文字/超时/替换路径让按钮失效）。 */
     private readonly sendQuestionCard?;
     private readonly pending;
     constructor(notify: (kind: string, userId: string, text: string) => Promise<boolean>, cancel?: (kind: string, userId: string) => boolean, log?: (line: string) => void, 
-    /** P1.5 选项按钮卡发送钩子（提问升级的卡片形态；缺省=文本卡）。 */
-    sendQuestionCard?: ((kind: string, userId: string, card: import("../core/channel.ts").ApprovalCardRequest) => Promise<boolean>) | undefined);
+    /** P1.5 选项按钮卡发送钩子（提问升级的卡片形态；返回主动定稿闭包供文字/超时/替换路径让按钮失效）。 */
+    sendQuestionCard?: ((kind: string, userId: string, card: import("../core/channel.ts").ApprovalCardRequest) => Promise<boolean | {
+        ok: boolean;
+        settle?: (outcome: "allowed" | "rejected" | "timeout") => Promise<void>;
+    }>) | undefined);
     hasPendingFor(kind: string, userId: string): boolean;
     private drop;
     /**

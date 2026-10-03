@@ -99,6 +99,8 @@ interface PendingQuestion {
   timer: NodeJS.Timeout
   /** P1.5 选项按钮点击关联（qans:<token>:<idx>；无按钮卡时缺省）。 */
   buttonToken?: string
+  /** P1.5 卡片定稿闭包（按钮点击时来自事件帧；文字/超时/替换路径由主动定稿闭包兜底）。 */
+  settleCard?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>
 }
 
 /**
@@ -113,8 +115,8 @@ export class QuestionBridge {
     private readonly notify: (kind: string, userId: string, text: string) => Promise<boolean>,
     private readonly cancel: (kind: string, userId: string) => boolean = () => false,
     private readonly log: (line: string) => void = () => {},
-    /** P1.5 选项按钮卡发送钩子（提问升级的卡片形态；缺省=文本卡）。 */
-    private readonly sendQuestionCard?: (kind: string, userId: string, card: import('../core/channel.ts').ApprovalCardRequest) => Promise<boolean>,
+    /** P1.5 选项按钮卡发送钩子（提问升级的卡片形态；返回主动定稿闭包供文字/超时/替换路径让按钮失效）。 */
+    private readonly sendQuestionCard?: (kind: string, userId: string, card: import('../core/channel.ts').ApprovalCardRequest) => Promise<boolean | { ok: boolean; settle?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void> }>,
   ) {}
 
   hasPendingFor(kind: string, userId: string): boolean {
@@ -136,6 +138,7 @@ export class QuestionBridge {
     const existing = this.pending.get(key)
     if (existing !== undefined) {
       // 同用户上一问未答：取消旧问，保留最新（与审批一致的串行语义）。
+      void existing.settleCard?.('timeout').catch(() => {})
       this.drop(existing)
       existing.reject(new Error('用户开始了新的提问，旧问题已取消'))
     }
@@ -148,6 +151,7 @@ export class QuestionBridge {
       }
       pending.timer = setTimeout(() => {
         this.log(`提问超时未回复（${questions.map(q => q.id).join(',')}），取消`)
+        void pending.settleCard?.('timeout').catch(() => {})
         this.drop(pending)
         void this.notify(kind, userId, '⏱ 提问超时已取消。')
         reject(new Error('IM 提问超时未回复'))
@@ -173,6 +177,12 @@ export class QuestionBridge {
         if (!delivered) {
           this.drop(pending)
           reject(new Error('IM 提问推送失败（用户无可达目标）'))
+          return
+        }
+        // P1.5 卡发送成功 → 记录主动定稿闭包（文字回答/超时/替换路径让按钮失效）
+        if (typeof delivered === 'object' && delivered !== null && 'ok' in delivered) {
+          const r = delivered as { ok: boolean; settle?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void> }
+          if (r.settle !== undefined) pending.settleCard = r.settle
         }
       })
     })
@@ -189,7 +199,7 @@ export class QuestionBridge {
       if (label === undefined) return false
       this.drop(pending)
       pending.resolve({ answers: [{ id: question.id, selected: [label] }] })
-      void settleCard?.('allowed').catch(() => {})
+      void (settleCard ?? pending.settleCard)?.('allowed').catch(() => {})
       void this.notify(pending.kind, pending.userId, `✅ 已收到你的回答：${label}——会话已继续。`)
       return true
     }
@@ -204,6 +214,7 @@ export class QuestionBridge {
     if (text.startsWith(commandPrefix)) return false
     const pending = this.pending.get(`${kind}:${userId}`)
     if (pending === undefined) return false
+    void pending.settleCard?.('allowed').catch(() => {})
     this.drop(pending)
     const answers = pending.questions.map((question, index) => index === 0
       ? answerForQuestion(question, text)

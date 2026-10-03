@@ -305,6 +305,7 @@ export function apply(ctx, config) {
         return r.pushToUser(kind, userId, body, { markdown: false });
     }, undefined, line => { ctx.logger.info(`[im-channel] ${line}`); }, 
     // P1.5 选项按钮卡发送钩子（提问升级的卡片形态；wecom 支持，其他渠道回退文本）。
+    // 返回 { ok, settle }——settle 为主动定稿闭包（文字回答/超时/替换路径让按钮失效）。
     async (kind, userId, card) => {
         const channel = router?.channels.find(c => c.kind === kind);
         const targetId = store.targetIdFor({ kind: kind, userId: userId });
@@ -312,7 +313,16 @@ export function apply(ctx, config) {
             return false;
         const fn = channel.sendApprovalCard;
         try {
-            return await fn.call(channel, { kind: kind, targetId }, card);
+            const ok = await fn.call(channel, { kind: kind, targetId }, card);
+            if (!ok)
+                return false;
+            const settle = async (outcome) => {
+                const ch = router?.channels.find(c => c.kind === kind);
+                if (ch?.settleQuestionCard === undefined)
+                    return;
+                await ch.settleQuestionCard(card.token, outcome).catch(() => { });
+            };
+            return { ok: true, settle };
         }
         catch {
             return false;

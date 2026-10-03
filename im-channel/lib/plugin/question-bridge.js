@@ -93,7 +93,7 @@ export class QuestionBridge {
     sendQuestionCard;
     pending = new Map();
     constructor(notify, cancel = () => false, log = () => { }, 
-    /** P1.5 选项按钮卡发送钩子（提问升级的卡片形态；缺省=文本卡）。 */
+    /** P1.5 选项按钮卡发送钩子（提问升级的卡片形态；返回主动定稿闭包供文字/超时/替换路径让按钮失效）。 */
     sendQuestionCard) {
         this.notify = notify;
         this.cancel = cancel;
@@ -118,6 +118,7 @@ export class QuestionBridge {
         const existing = this.pending.get(key);
         if (existing !== undefined) {
             // 同用户上一问未答：取消旧问，保留最新（与审批一致的串行语义）。
+            void existing.settleCard?.('timeout').catch(() => { });
             this.drop(existing);
             existing.reject(new Error('用户开始了新的提问，旧问题已取消'));
         }
@@ -130,6 +131,7 @@ export class QuestionBridge {
             };
             pending.timer = setTimeout(() => {
                 this.log(`提问超时未回复（${questions.map(q => q.id).join(',')}），取消`);
+                void pending.settleCard?.('timeout').catch(() => { });
                 this.drop(pending);
                 void this.notify(kind, userId, '⏱ 提问超时已取消。');
                 reject(new Error('IM 提问超时未回复'));
@@ -156,6 +158,13 @@ export class QuestionBridge {
                 if (!delivered) {
                     this.drop(pending);
                     reject(new Error('IM 提问推送失败（用户无可达目标）'));
+                    return;
+                }
+                // P1.5 卡发送成功 → 记录主动定稿闭包（文字回答/超时/替换路径让按钮失效）
+                if (typeof delivered === 'object' && delivered !== null && 'ok' in delivered) {
+                    const r = delivered;
+                    if (r.settle !== undefined)
+                        pending.settleCard = r.settle;
                 }
             });
         });
@@ -174,7 +183,7 @@ export class QuestionBridge {
                 return false;
             this.drop(pending);
             pending.resolve({ answers: [{ id: question.id, selected: [label] }] });
-            void settleCard?.('allowed').catch(() => { });
+            void (settleCard ?? pending.settleCard)?.('allowed').catch(() => { });
             void this.notify(pending.kind, pending.userId, `✅ 已收到你的回答：${label}——会话已继续。`);
             return true;
         }
@@ -190,6 +199,7 @@ export class QuestionBridge {
         const pending = this.pending.get(`${kind}:${userId}`);
         if (pending === undefined)
             return false;
+        void pending.settleCard?.('allowed').catch(() => { });
         this.drop(pending);
         const answers = pending.questions.map((question, index) => index === 0
             ? answerForQuestion(question, text)

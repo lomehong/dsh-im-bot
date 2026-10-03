@@ -521,6 +521,20 @@ ${card.question.options.map((o, idx) => `${idx + 1}. ${o.label}${o.description !
     this.approvalHandlers.push(handler)
   }
 
+  /** P1.5 提问卡主动定稿（文字回答/超时/新问替换路径）：按 token 更新卡片为已定稿形态。 */
+  async settleQuestionCard(token: string, outcome: 'allowed' | 'rejected' | 'timeout'): Promise<boolean> {
+    const client = this.client
+    if (client === null || client === undefined) return false
+    try {
+      await client.updateTemplateCard(undefined as never, decidedWecomCard(outcome === 'timeout' ? 'rejected' : outcome, `imch_appr_${token}`))
+      this.log(`wecom 提问卡已主动定稿: token=${token} outcome=${outcome}`)
+      return true
+    } catch (error) {
+      this.log(`wecom 提问卡主动定稿失败（决策本身不受影响）: ${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
+  }
+
   async send(target: ReplyTarget, message: OutboundMessage): Promise<void> {
     const client = this.client
     if (client === undefined) throw new Error('企业微信通道未连接')
