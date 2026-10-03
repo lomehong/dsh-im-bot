@@ -108,8 +108,6 @@ export class WecomChannel implements ImChannel {
   private deadHandlers: Array<(reason: string) => void> = []
   /** 审批卡片按钮决策回调（template_card_event → 桥接层）。 */
   private approvalHandlers: Array<(action: ApprovalAction) => void> = []
-  /** P1.5 提问选项点击处理器（qans 卡片按钮）。 */
-  private questionOptionHandlers: Array<(action: { kind: 'wecom'; token: string; optionIdx: number; userId: string; settleCard: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void> }) => void> = []
   /** 用于区分 SDK 端事件与我们的定时器 */
   private cleanTimer: NodeJS.Timeout | undefined
   /** 认证状态跟踪：企微只认「最新活跃连接」，未认证成功的连接收不到消息，
@@ -265,10 +263,12 @@ export class WecomChannel implements ImChannel {
               this.log(`wecom 提问选项卡定稿失败（决策本身不受影响）: ${error instanceof Error ? error.message : String(error)}`)
             }
           }
-          for (const handler of this.questionOptionHandlers) {
+          // P1.5 提问选项点击：与审批同一条 approvalHandlers 分发链（action 带 optionIdx）。
+          for (const handler of this.approvalHandlers) {
             handler({
               kind: 'wecom',
               token: qansMatch[1],
+              decision: Number(qansMatch[2]) === 0 ? 'allow' : 'deny',
               optionIdx: Number(qansMatch[2]),
               userId: data.body.from.userid,
               settleCard: qSettleCard,
@@ -518,11 +518,6 @@ ${(card.question.detail ?? '').slice(0, 200)}` : ''}
 
   onApprovalAction(handler: (action: ApprovalAction) => void): void {
     this.approvalHandlers.push(handler)
-  }
-
-  /** P1.5 注册提问选项点击处理器。 */
-  onQuestionOptionAction(handler: (action: { kind: 'wecom'; token: string; optionIdx: number; userId: string; settleCard: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void> }) => void): void {
-    this.questionOptionHandlers.push(handler)
   }
 
   async send(target: ReplyTarget, message: OutboundMessage): Promise<void> {

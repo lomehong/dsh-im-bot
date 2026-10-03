@@ -47,8 +47,6 @@ export declare class WecomChannel implements ImChannel {
     private deadHandlers;
     /** 审批卡片按钮决策回调（template_card_event → 桥接层）。 */
     private approvalHandlers;
-    /** P1.5 提问选项点击处理器（qans 卡片按钮）。 */
-    private questionOptionHandlers;
     /** 用于区分 SDK 端事件与我们的定时器 */
     private cleanTimer;
     /** 认证状态跟踪：企微只认「最新活跃连接」，未认证成功的连接收不到消息，
@@ -101,14 +99,6 @@ export declare class WecomChannel implements ImChannel {
     /** 发送 button_interaction 模板卡片（允许/拒绝），事件经同连接回传。 */
     sendApprovalCard(target: ReplyTarget, card: ApprovalCardRequest): Promise<boolean>;
     onApprovalAction(handler: (action: ApprovalAction) => void): void;
-    /** P1.5 注册提问选项点击处理器。 */
-    onQuestionOptionAction(handler: (action: {
-        kind: 'wecom';
-        token: string;
-        optionIdx: number;
-        userId: string;
-        settleCard: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>;
-    }) => void): void;
     send(target: ReplyTarget, message: OutboundMessage): Promise<void>;
     /**
      * 打开流式回合：使用 replyStream 实现打字机效果
