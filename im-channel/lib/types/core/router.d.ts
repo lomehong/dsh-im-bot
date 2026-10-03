@@ -114,6 +114,10 @@ export interface RouterDeps {
     readonly ownerReplyInterceptor?: {
         consume(kind: InboundMessage['from']['kind'], ownerUserId: string, text: string): boolean;
     };
+    /** P1.5 提问选项点击（qans 卡片按钮）路由。 */
+    readonly questionOptions?: {
+        resolveByButtonToken(kind: InboundMessage['from']['kind'], token: string, optionIdx: number, userId: string, settleCard?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>): boolean;
+    };
     /** P1.5 任务决策桥（task-board 审批卡按钮点击；在 approval 之后咨询）。 */
     readonly taskApproval?: {
         resolveByToken(kind: InboundMessage['from']['kind'], token: string, decision: 'allow' | 'deny', userId: string, settleCard?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>): boolean;

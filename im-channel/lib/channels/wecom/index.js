@@ -81,6 +81,8 @@ export class WecomChannel {
     deadHandlers = [];
     /** 审批卡片按钮决策回调（template_card_event → 桥接层）。 */
     approvalHandlers = [];
+    /** P1.5 提问选项点击处理器（qans 卡片按钮）。 */
+    questionOptionHandlers = [];
     /** 用于区分 SDK 端事件与我们的定时器 */
     cleanTimer;
     /** 认证状态跟踪：企微只认「最新活跃连接」，未认证成功的连接收不到消息，
@@ -172,9 +174,11 @@ export class WecomChannel {
             // 类型声明为平铺，与 wire 不符——之前在顶层找 event_key 永远是 '-'）。
             const eventKey = event?.template_card_event?.event_key ?? event?.event_key ?? '-';
             this.log(`wecom template_card_event: user=${data.body?.from?.userid ?? '?'} key=${eventKey}`);
-            // 审批按钮回调：key 形如 approve:<token> / deny:<token>（同连接回传）。
+            // 审批/提问按钮回调：key 形如 approve:<token> / deny:<token> /
+            // qans:<token>:<idx>（提问选项点击，同连接回传）。
             if (typeof eventKey === 'string' && data.body?.from?.userid !== undefined) {
                 const match = /^(approve|deny):([a-z0-9]{4,12})$/.exec(eventKey);
+                const qansMatch = /^qans:([a-z0-9]{4,32}):(\d{1,2})$/.exec(eventKey);
                 if (match !== null) {
                     const client = this.client;
                     // WsFrameHeaders 是 { headers } 包裹结构（Pick<WsFrame,'headers'>），
@@ -209,6 +213,32 @@ export class WecomChannel {
                             decision: match[1] === 'approve' ? 'allow' : 'deny',
                             userId: data.body.from.userid,
                             settleCard,
+                        });
+                    }
+                }
+                // P1.5 提问选项点击：qans:<token>:<idx>（提问选项卡的选项按钮）。
+                if (qansMatch !== null) {
+                    const client = this.client;
+                    const frameHeaders = { headers: data.headers };
+                    const qTaskId = `imch_qans_${qansMatch[1]}`;
+                    const qSettleCard = async (outcome) => {
+                        if (client === null || client === undefined)
+                            return;
+                        try {
+                            await client.updateTemplateCard(frameHeaders, decidedWecomCard(outcome === 'timeout' ? 'rejected' : outcome, qTaskId));
+                            this.log(`wecom 提问选项卡已定稿: task=${qTaskId} outcome=${outcome}`);
+                        }
+                        catch (error) {
+                            this.log(`wecom 提问选项卡定稿失败（决策本身不受影响）: ${error instanceof Error ? error.message : String(error)}`);
+                        }
+                    };
+                    for (const handler of this.questionOptionHandlers) {
+                        handler({
+                            kind: 'wecom',
+                            token: qansMatch[1],
+                            optionIdx: Number(qansMatch[2]),
+                            userId: data.body.from.userid,
+                            settleCard: qSettleCard,
                         });
                     }
                 }
@@ -405,6 +435,8 @@ export class WecomChannel {
         // P1.5 任务审批卡（task-board 阻断式审批）：任务语义标题 + 批准/拒绝按钮；
         // 按钮 key 复用 approve:/deny: 词汇（同一条 template_card_event 回传链路）。
         const isTask = card.task !== undefined;
+        // P1.5 提问选项卡（ask_user_question 升级企微）：选项按钮 key qans:<token>:<idx>。
+        const isQuestion = card.question !== undefined;
         try {
             await client.sendMessage(target.targetId, {
                 msgtype: 'template_card',
@@ -414,20 +446,28 @@ export class WecomChannel {
                     // 审批 token 天然唯一，直接复用。
                     task_id: `imch_appr_${card.token}`,
                     source: { desc: 'dsh 数字分身' },
-                    main_title: isTask
-                        ? { title: `任务审批 ${card.task.taskId}`, desc: `级别：${card.task.level}` }
-                        : { title: '工具执行审批', desc: `工具：${card.toolName}` },
-                    sub_title_text: isTask
-                        ? `${card.task.title}${card.task.summary.length > 0 ? `
+                    main_title: isQuestion
+                        ? { title: '提问', desc: `来自会话 ${card.question.callId.slice(0, 10)}…` }
+                        : isTask
+                            ? { title: `任务审批 ${card.task.taskId}`, desc: `级别：${card.task.level}` }
+                            : { title: '工具执行审批', desc: `工具：${card.toolName}` },
+                    sub_title_text: isQuestion
+                        ? `${card.question.question}${(card.question.detail ?? '').length > 0 ? `
+${(card.question.detail ?? '').slice(0, 200)}` : ''}
+请点击选项作答（亦可直接文字回复编号）`
+                        : isTask
+                            ? `${card.task.title}${card.task.summary.length > 0 ? `
 要点：${card.task.summary.slice(0, 120)}` : ''}
 请选择批准或拒绝（看板/控制台亦可处理）`
-                        : `触发：${card.guestLabel}${card.reason !== undefined && card.reason.length > 0 ? `
+                            : `触发：${card.guestLabel}${card.reason !== undefined && card.reason.length > 0 ? `
 说明：${card.reason.slice(0, 120)}` : ''}
 请选择允许或拒绝（超时自动拒绝）`,
-                    button_list: [
-                        { text: isTask ? '批准' : '允许', key: `approve:${card.token}`, style: 1 },
-                        { text: '拒绝', key: `deny:${card.token}`, style: 2 },
-                    ],
+                    button_list: isQuestion
+                        ? card.question.options.map((o, idx) => ({ text: o.label.slice(0, 12), key: `qans:${card.token}:${idx}`, style: idx === 0 ? 1 : 2 }))
+                        : [
+                            { text: isTask ? '批准' : '允许', key: `approve:${card.token}`, style: 1 },
+                            { text: '拒绝', key: `deny:${card.token}`, style: 2 },
+                        ],
                 },
             });
             return true;
@@ -439,6 +479,10 @@ export class WecomChannel {
     }
     onApprovalAction(handler) {
         this.approvalHandlers.push(handler);
+    }
+    /** P1.5 注册提问选项点击处理器。 */
+    onQuestionOptionAction(handler) {
+        this.questionOptionHandlers.push(handler);
     }
     async send(target, message) {
         const client = this.client;

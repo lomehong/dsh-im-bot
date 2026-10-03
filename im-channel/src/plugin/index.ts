@@ -325,6 +325,14 @@ export function apply(ctx: Context, config: ImChannelSection): void {
     },
     undefined,
     line => { ctx.logger.info(`[im-channel] ${line}`) },
+    // P1.5 选项按钮卡发送钩子（提问升级的卡片形态；wecom 支持，其他渠道回退文本）。
+    async (kind, userId, card) => {
+      const channel = router?.channels.find(c => c.kind === kind)
+      const targetId = store.targetIdFor({ kind: kind as 'feishu' | 'wechat' | 'wecom', userId: userId as never })
+      if (channel === undefined || targetId === undefined || typeof channel.sendApprovalCard !== 'function') return false
+      const fn = channel.sendApprovalCard
+      try { return await fn.call(channel, { kind: kind as 'feishu' | 'wechat' | 'wecom', targetId }, card) } catch { return false }
+    },
   )
 const driver = new HarnessDriver(ctx, {
     mcpRegistry,
@@ -345,7 +353,8 @@ const driver = new HarnessDriver(ctx, {
     onUserQuestion: (sessionId, questions) => {
       const row = ownerRowFor(sessionId)
       if (row === undefined) return Promise.reject(new Error('会话未绑定 IM 用户，无法经 IM 提问'))
-      return questionBridge.ask(row.kind, row.userId, questions)
+      // P1.5：IM 会话的 ask_user_question 也走选项按钮卡（useCard）
+      return questionBridge.ask(row.kind, row.userId, questions, { useCard: true })
     },
     onOwnerApproval: ({ sessionId, toolName, reason, guestUserId }) => {
       const row = store.findBySession(sessionId)
@@ -592,6 +601,9 @@ const driver = new HarnessDriver(ctx, {
         },
         taskApproval: {
           resolveByToken: (kind, token, decision, userId, settleCard) => taskBridge.resolveByToken(kind, token, decision, userId, settleCard),
+        },
+        questionOptions: {
+          resolveByButtonToken: (kind, token, optionIdx, userId, settleCard) => questionBridge.resolveByButtonToken(token, optionIdx, userId, settleCard),
         },
         ownerReplyInterceptor: {
           consume: (kind: 'feishu' | 'wechat' | 'wecom', ownerUserId: string, messageText: string): boolean => {

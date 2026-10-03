@@ -102,6 +102,8 @@ export interface ApprovalCardRequest {
   readonly reason: string | undefined
   /** P1.5 任务审批卡（task-board 阻断式审批）：在场时渲染任务语义卡片（批准/拒绝）。 */
   readonly task?: { taskId: string; title: string; level: string; summary: string }
+  /** P1.5 提问选项卡（ask_user_question 升级企微）：选项按钮，点击即答案。 */
+  readonly question?: { callId: string; question: string; detail?: string; options: Array<{ label: string; description?: string }> }
 }
 
 /** One inbound image, decoded to bytes with a sniffed media type. */
@@ -128,6 +130,8 @@ export interface ApprovalAction {
   readonly userId: string
   /** Best-effort card finalization (mark decided/timeout on the card). */
   readonly settleCard?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>
+  /** P1.5 提问选项点击（qans:token:idx）：选项序号（0 基）。 */
+  readonly optionIdx?: number
 }
 
 /**

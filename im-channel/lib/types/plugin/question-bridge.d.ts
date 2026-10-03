@@ -43,15 +43,36 @@ export declare class QuestionBridge {
     private readonly notify;
     private readonly cancel;
     private readonly log;
+    /** P1.5 选项按钮卡发送钩子（提问升级的卡片形态；缺省=文本卡）。 */
+    private readonly sendQuestionCard?;
     private readonly pending;
-    constructor(notify: (kind: string, userId: string, text: string) => Promise<boolean>, cancel?: (kind: string, userId: string) => boolean, log?: (line: string) => void);
+    constructor(notify: (kind: string, userId: string, text: string) => Promise<boolean>, cancel?: (kind: string, userId: string) => boolean, log?: (line: string) => void, 
+    /** P1.5 选项按钮卡发送钩子（提问升级的卡片形态；缺省=文本卡）。 */
+    sendQuestionCard?: ((kind: string, userId: string, card: {
+        token: string;
+        question: {
+            callId: string;
+            question: string;
+            detail?: string;
+            options: Array<{
+                label: string;
+                description?: string;
+            }>;
+        };
+    }) => Promise<boolean>) | undefined);
     hasPendingFor(kind: string, userId: string): boolean;
     private drop;
     /**
      * Ask one user the given questions over IM. Rejects on timeout or delivery
      * failure so the agent's ask_user_question surfaces the miss.
      */
-    ask(kind: string, userId: string, questions: QuestionItem[]): Promise<QuestionAnswer>;
+    ask(kind: string, userId: string, questions: QuestionItem[], opts?: {
+        buttonToken?: string;
+        useCard?: boolean;
+    }): Promise<QuestionAnswer>;
+    /** P1.5 选项按钮点击：按 buttonToken 找待决提问，解析为该选项的答案。
+     *  仅 Owner 本人点击被接受（与审批桥同款纵深防御）。 */
+    resolveByButtonToken(token: string, optionIdx: number, userId: string, settleCard?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>): boolean;
     /**
      * Router hook: consume one reply as the answer to the user's pending
      * question. Slash commands are never consumed. Returns true when consumed.

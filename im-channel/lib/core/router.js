@@ -57,8 +57,14 @@ export class Router {
                 if (consumed)
                     return;
                 const taskConsumed = this.deps.taskApproval?.resolveByToken(action.kind, action.token, action.decision, action.userId, action.settleCard) ?? false;
-                if (!taskConsumed)
-                    this.log(`[im-channel] ${channel.label} 审批按钮未匹配待决请求（token=${action.token}），忽略`);
+                if (taskConsumed)
+                    return;
+                if (action.optionIdx !== undefined && this.deps.questionOptions !== undefined) {
+                    const qConsumed = this.deps.questionOptions.resolveByButtonToken(action.kind, action.token, action.optionIdx, action.userId, action.settleCard);
+                    if (qConsumed)
+                        return;
+                }
+                this.log(`[im-channel] ${channel.label} 审批按钮未匹配待决请求（token=${action.token}），忽略`);
             });
             try {
                 await channel.connect();

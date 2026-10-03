@@ -90,11 +90,15 @@ export class QuestionBridge {
     notify;
     cancel;
     log;
+    sendQuestionCard;
     pending = new Map();
-    constructor(notify, cancel = () => false, log = () => { }) {
+    constructor(notify, cancel = () => false, log = () => { }, 
+    /** P1.5 选项按钮卡发送钩子（提问升级的卡片形态；缺省=文本卡）。 */
+    sendQuestionCard) {
         this.notify = notify;
         this.cancel = cancel;
         this.log = log;
+        this.sendQuestionCard = sendQuestionCard;
     }
     hasPendingFor(kind, userId) {
         return this.pending.has(`${kind}:${userId}`);
@@ -109,7 +113,7 @@ export class QuestionBridge {
      * Ask one user the given questions over IM. Rejects on timeout or delivery
      * failure so the agent's ask_user_question surfaces the miss.
      */
-    async ask(kind, userId, questions) {
+    async ask(kind, userId, questions, opts) {
         const key = `${kind}:${userId}`;
         const existing = this.pending.get(key);
         if (existing !== undefined) {
@@ -122,6 +126,7 @@ export class QuestionBridge {
                 kind, userId, questions,
                 resolve, reject,
                 timer: undefined,
+                ...(opts?.buttonToken !== undefined ? { buttonToken: opts.buttonToken } : {}),
             };
             pending.timer = setTimeout(() => {
                 this.log(`提问超时未回复（${questions.map(q => q.id).join(',')}），取消`);
@@ -131,13 +136,40 @@ export class QuestionBridge {
             }, QUESTION_TIMEOUT_MS);
             pending.timer.unref?.();
             this.pending.set(key, pending);
-            void this.notify(kind, userId, questionText(questions)).then(delivered => {
+            // P1.5 卡片形态：useCard 且通道支持 → 选项按钮卡；否则文本编号卡。
+            const pushQuestion = opts?.useCard === true && this.sendQuestionCard !== undefined
+                ? this.sendQuestionCard(kind, userId, {
+                    token: opts.buttonToken ?? '',
+                    question: { callId: questions[0]?.id ?? '', question: questions[0]?.question ?? '', ...(questions[0]?.detail !== undefined ? { detail: questions[0].detail } : {}), options: questions[0]?.options ?? [] },
+                })
+                : this.notify(kind, userId, questionText(questions));
+            void pushQuestion.then(delivered => {
                 if (!delivered) {
                     this.drop(pending);
                     reject(new Error('IM 提问推送失败（用户无可达目标）'));
                 }
             });
         });
+    }
+    /** P1.5 选项按钮点击：按 buttonToken 找待决提问，解析为该选项的答案。
+     *  仅 Owner 本人点击被接受（与审批桥同款纵深防御）。 */
+    resolveByButtonToken(token, optionIdx, userId, settleCard) {
+        for (const pending of this.pending.values()) {
+            if (pending.buttonToken !== token)
+                continue;
+            if (pending.userId !== userId)
+                return false;
+            const question = pending.questions[0];
+            const label = question.options?.[optionIdx]?.label;
+            if (label === undefined)
+                return false;
+            this.drop(pending);
+            pending.resolve({ answers: [{ id: question.id, selected: [label] }] });
+            void settleCard?.('allowed').catch(() => { });
+            void this.notify(pending.kind, pending.userId, `✅ 已收到你的回答：${label}——会话已继续。`);
+            return true;
+        }
+        return false;
     }
     /**
      * Router hook: consume one reply as the answer to the user's pending

@@ -111,6 +111,8 @@ export interface RouterDeps {
   /** P1.5 通用主人回复拦截器（task-board 审批等跨插件语义）：在审批之后、
    *  提问与命令之前消费；返回 true = 已消费，路由终止。缺席 = 无拦截。 */
   readonly ownerReplyInterceptor?: { consume(kind: InboundMessage['from']['kind'], ownerUserId: string, text: string): boolean }
+  /** P1.5 提问选项点击（qans 卡片按钮）路由。 */
+  readonly questionOptions?: { resolveByButtonToken(kind: InboundMessage['from']['kind'], token: string, optionIdx: number, userId: string, settleCard?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>): boolean }
   /** P1.5 任务决策桥（task-board 审批卡按钮点击；在 approval 之后咨询）。 */
   readonly taskApproval?: { resolveByToken(kind: InboundMessage['from']['kind'], token: string, decision: 'allow' | 'deny', userId: string, settleCard?: (outcome: 'allowed' | 'rejected' | 'timeout') => Promise<void>): boolean }
   /** Token usage snapshot for /状态; absent hides the context line. */
@@ -211,7 +213,12 @@ export class Router {
         const consumed = this.deps.approval?.resolveByToken(action.kind, action.token, action.decision, action.userId, action.settleCard) ?? false
         if (consumed) return
         const taskConsumed = this.deps.taskApproval?.resolveByToken(action.kind, action.token, action.decision, action.userId, action.settleCard) ?? false
-        if (!taskConsumed) this.log(`[im-channel] ${channel.label} 审批按钮未匹配待决请求（token=${action.token}），忽略`)
+        if (taskConsumed) return
+        if (action.optionIdx !== undefined && this.deps.questionOptions !== undefined) {
+          const qConsumed = this.deps.questionOptions.resolveByButtonToken(action.kind, action.token, action.optionIdx, action.userId, action.settleCard)
+          if (qConsumed) return
+        }
+        this.log(`[im-channel] ${channel.label} 审批按钮未匹配待决请求（token=${action.token}），忽略`)
       })
       try {
         await channel.connect()
