@@ -534,15 +534,42 @@ export function apply(ctx, config) {
             ]);
             consoleQuestionPending.delete(`${sessionId}:${callId}`);
             if (winner.source === 'im') {
-                const ok = uq.answer(agentObj, callId, winner.answer);
-                escDebug(`answer 回注: ok=${ok}`);
-                if (!ok) {
-                    for (const t of targets) {
-                        try {
-                            void router?.pushToUser(t.kind, t.userId, '❌ 回注失败：会话可能已更替——请在控制台重新提问。', { markdown: true });
-                        }
-                        catch { /* 静默 */ }
+                // P1.5 最后一公里（调研定稿）：源头升级的问题由 web 答案器 stage 持有
+                // （waterfall 接力），不在 continued(agent) 清单——uq.answer 无法回注。
+                // 改走 session/prompt 队列注入（复用 task-board 投递线型）：企微答案
+                // 作为用户消息进入原会话，ask 10 分钟超时挂起后模型即可见，会话以
+                // 企微答案继续。
+                const gw = ctx.get('typertGateway');
+                let injected = false;
+                if (gw !== undefined) {
+                    try {
+                        const answerText = winner.answer.answers
+                            .map(a => [...a.selected, a.custom ?? ''].filter(s => s !== '').join(' '))
+                            .filter(s => s !== '').join('；');
+                        await gw.invoke({
+                            namespace: 'session',
+                            method: 'prompt',
+                            args: { request: {
+                                    sessionId: sessionId,
+                                    requestId: `im-channel-answer-${Date.now()}`,
+                                    mode: 'queue',
+                                    content: [{ type: 'text', text: `（企微回答）${answerText}` }],
+                                } },
+                        });
+                        injected = true;
                     }
+                    catch (e) {
+                        ctx.logger?.warn?.('[im-channel] 答案注入失败（会话可能已更替）:', e instanceof Error ? e.message : String(e));
+                    }
+                }
+                const feedback = injected
+                    ? '✅ 回答已转交会话（问题挂起超时后由会话继续处理）。'
+                    : '❌ 答案转交失败——请在控制台重新提问。';
+                for (const t of targets) {
+                    try {
+                        void router?.pushToUser(t.kind, t.userId, feedback, { markdown: true });
+                    }
+                    catch { /* 静默 */ }
                 }
                 return askTimedPromise;
             }
