@@ -13,7 +13,7 @@ import { getEnabledMcpServers, serverEntryToConfig } from "../channels/mcp-serve
 import { LoginApi } from "./login-api.js";
 import { createSectionView } from "./section-view.js";
 import { ApprovalBridge } from "./approval-bridge.js";
-import { answerForQuestion, QuestionBridge, questionText } from "./question-bridge.js";
+import { QuestionBridge, questionText } from "./question-bridge.js";
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -80,8 +80,6 @@ export function apply(ctx, config) {
     let disposeRouter;
     /** P1.5 通用主人回复拦截器（跨插件注册；路由重建共享同一数组引用）。 */
     const ownerReplyInterceptors = [];
-    /** P1.5 待决控制台提问（企微答案器）：拦截器命中后 resolve。 */
-    const pendingConsoleAsks = [];
     ctx.provide('im-channel', {
         /**
          * 主动推送一条消息给指定渠道用户（须已绑定且记录过 lastTargetId）。
@@ -500,99 +498,39 @@ export function apply(ctx, config) {
         // 包装器把答案作为 ask 的返回值交给工具——模型带着答案继续。
         // 无 waterfall、无 callId、无投影轮询、无挂起窗口。10 分钟未回复 → 报错
         // 返回（模型可稍后再问）。在场（engagedElsewhere）/IM 来源/多问题 → 原样放行。
+        // P1.5 最终实现（复用成熟链路）：控制台会话的单问题 ask → 委托
+        // questionBridge.ask（IM 会话天天在用的编号选项+回复即答案全链路，
+        // 含 10 分钟超时/串行语义）——答案作为 ask 返回值交回工具。
+        // 门控 v3：别处有对话（主人正忙）→ 原样放行；无 → 升级企微。
         uq.ask = async (request) => {
             const req = request;
+            // askTimed 内部回调 this.ask（wait.timed=true）——委托原实现防递归
+            if (req?.wait?.timed === true)
+                return originalAsk(request);
             const agentObj = req?.agent ?? agentsSvc?.currentInitiator?.();
             const sessionId = agentObj?.session?.header?.id;
             const single = Array.isArray(req?.questions) && req.questions.length === 1;
             const driverOwned = sessionId !== undefined && typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId);
-            escDebug(`ask 触发: sessionId=${sessionId === undefined ? '无' : sessionId.slice(0, 10)}… single=${single} driverOwned=${driverOwned} agent=${agentObj !== undefined}`);
-            if (sessionId === undefined) {
-                escDebug('跳过: 无法定位会话');
+            if (sessionId === undefined || !single || driverOwned || agentObj === undefined)
                 return originalAsk(request);
-            }
             const elsewhere = samplePresence(sessionId)?.engagedElsewhere === true;
-            escDebug(`门控: 别处有对话=${elsewhere}`);
-            // P1.5 语义修正（主人拍板）：别处无对话（主人不在跟别的会话对话）= 需要企微升级；别处有对话 = 主人正忙于那个对话，不打扰（原样放行）
-            if (elsewhere) {
-                escDebug('跳过: 主人正在别处对话——不打扰');
+            if (elsewhere)
                 return originalAsk(request);
-            }
             const questions = req.questions;
-            const targets = consoleMasterTargets();
-            if (targets.length === 0) {
-                escDebug('跳过: masterTargets 为空');
+            const owner = store.ownerFor('wecom');
+            if (owner === undefined) {
+                escDebug('企微未绑定 Owner——放行原 ask');
                 return originalAsk(request);
             }
-            const q = questions[0];
-            const optionLines = (q.options ?? []).map((o, i) => `${i + 1}. ${o.label}${o.description !== undefined && o.description !== '' ? `（${o.description}）` : ''}`);
-            const card = `❓ ${q.question}${q.detail !== undefined && q.detail !== '' ? `\n${q.detail}` : ''}
-${optionLines.join('\n')}
-（主人不在电脑旁——直接回复编号或选项文字即作答；10 分钟内未回复本次提问将取消）`;
-            escDebug(`拦截 ask 升级企微: session=${sessionId.slice(0, 10)}… 题数=1`);
-            const ownerUserIds = targets.map(t => ({ kind: t.kind, userId: t.userId }));
-            let resolveAsk;
-            pendingConsoleAsks.push({ ownerUserIds, questions, resolve: resolveAsk });
-            for (const t of targets) {
-                try {
-                    void router?.pushToUser(t.kind, t.userId, card, { markdown: true });
-                }
-                catch { /* 单目标失败不阻断 */ }
-            }
-            const answer = await new Promise((resolve, reject) => {
-                resolveAsk = resolve;
-                setTimeout(() => {
-                    const idx = pendingConsoleAsks.findIndex(p => p.resolve === resolveAsk);
-                    if (idx >= 0)
-                        pendingConsoleAsks.splice(idx, 1);
-                    reject(new Error('企微 30 分钟未回复，本次提问已取消——请稍后重新发起'));
-                }, 1_800_000).unref?.();
-            });
-            const idx = pendingConsoleAsks.findIndex(p => p.resolve === resolveAsk);
-            if (idx >= 0)
-                pendingConsoleAsks.splice(idx, 1);
-            escDebug(`企微答案已回: 题目=${q.id} 选项=${answer.answers[0]?.selected.join('/') ?? ''} 自由文本=${answer.answers[0]?.custom ?? '无'}`);
-            for (const t of targets) {
-                try {
-                    void router?.pushToUser(t.kind, t.userId, '✅ 已收到你的回答，会话已继续。', { markdown: true });
-                }
-                catch { /* 静默 */ }
-            }
-            return { answers: questions.map(qq => qq.id === q.id ? answer.answers[0] : { id: qq.id, selected: [], custom: '' }) };
+            escDebug(`ask 升级企微问答桥: session=${sessionId.slice(0, 10)}… 题数=1`);
+            const answer = await questionBridge.ask('wecom', owner.userId, questions);
+            escDebug(`企微答案已回: ${answer.answers.map(a => [...a.selected, a.custom ?? ''].join('/')).join('；')}`);
+            return answer;
         };
         // P1.5：askTimed 保持原样（源头上升级直接调用它；不再单独包装——旧包装
         // 会与 ask 包装叠加成双升级）。askTimed 内部的 this.ask 回调由 ask 包装
         // 的 wait.timed 守卫委托 originalAsk，无递归。
         escDebug('ask 包装已安装（ask/answer 可用；askTimed 保持原样）');
-        // 企微回复 → 解析答案 → resolve 待决升级（命令前缀不消费）
-        ownerReplyInterceptors.push((kind, ownerUserId, text) => {
-            const prefix = section.read().commandPrefix || '/';
-            if (text.startsWith(prefix))
-                return false;
-            for (const pending of consoleQuestionPending.values()) {
-                if (!pending.ownerUserIds.some(t => t.userId === ownerUserId))
-                    continue;
-                escDebug(`拦截器命中提问答案: owner=${ownerUserId.slice(0, 8)}… text=${text.slice(0, 24)}`);
-                const answerItem = answerForQuestion(pending.questions[0], text);
-                consoleQuestionPending.delete(`${pending.sessionId}:${pending.callId}`);
-                pending.resolve({ answers: [answerItem] });
-                return true;
-            }
-            return false;
-        });
-        ctx.logger?.info?.('[im-channel] 控制台提问升级已启用（askTimed 包装 + 在场门控 + 离开沿触发；单问题批次）');
-    });
-    // 企微回复 → 解析答案 → resolve 待决 ask（10 分钟超时则报错）
-    ownerReplyInterceptors.push((kind, ownerUserId, text) => {
-        const prefix = section.read().commandPrefix || '/';
-        if (text.startsWith(prefix))
-            return false;
-        const pendingAsk = pendingConsoleAsks.find(p => p.ownerUserIds.some(t => t.userId === ownerUserId));
-        if (pendingAsk === undefined)
-            return false;
-        const answerItem = answerForQuestion(pendingAsk.questions[0], text);
-        pendingAsk.resolve({ answers: [answerItem] });
-        return true;
     });
     /** Rebuild the router from the current declared instances: dispose the old one, then build channels for every credentialled enabled instance. */
     const rebuildRouter = () => {
