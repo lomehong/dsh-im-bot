@@ -136,14 +136,19 @@ export class QuestionBridge {
             }, QUESTION_TIMEOUT_MS);
             pending.timer.unref?.();
             this.pending.set(key, pending);
-            // P1.5 卡片形态：useCard 且通道支持 → 选项按钮卡；否则文本编号卡。
+            // P1.5 卡片形态：useCard 且通道支持 → 文字（完整选项清单，保证可读）
+            // + 选项按钮卡（点击承载）；否则仅文本编号卡。
             const pushQuestion = opts?.useCard === true && this.sendQuestionCard !== undefined
-                ? this.sendQuestionCard(kind, userId, {
-                    token: opts.buttonToken ?? '',
-                    guestLabel: '',
-                    toolName: '',
-                    reason: undefined,
-                    question: { callId: questions[0]?.id ?? '', question: questions[0]?.question ?? '', ...(questions[0]?.detail !== undefined ? { detail: questions[0].detail } : {}), options: questions[0]?.options ?? [] },
+                ? this.notify(kind, userId, questionText(questions)).then(async (ok) => {
+                    if (!ok)
+                        return false;
+                    return await this.sendQuestionCard(kind, userId, {
+                        token: opts.buttonToken ?? '',
+                        guestLabel: '',
+                        toolName: '',
+                        reason: undefined,
+                        question: { callId: questions[0]?.id ?? '', question: questions[0]?.question ?? '', ...(questions[0]?.detail !== undefined ? { detail: questions[0].detail } : {}), options: questions[0]?.options ?? [] },
+                    });
                 })
                 : this.notify(kind, userId, questionText(questions));
             void pushQuestion.then(delivered => {
