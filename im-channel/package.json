@@ -1,6 +1,6 @@
 {
   "name": "@dsh-extra/im-channel",
-  "version": "0.2.23",
+  "version": "0.2.24",
   "description": "IM front-end channels (WeChat, Feishu) for DeepSeek Harness: scan-code login, message routing to agent sessions",
   "license": "MIT",
   "type": "module",

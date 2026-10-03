@@ -493,7 +493,8 @@ export class WecomChannel implements ImChannel {
           sub_title_text: isQuestion
             ? `${card.question.question}${(card.question.detail ?? '').length > 0 ? `
 ${(card.question.detail ?? '').slice(0, 200)}` : ''}
-请点击选项作答（亦可直接文字回复编号）`
+${card.question.options.map((o, idx) => `${idx + 1}. ${o.label}${o.description !== undefined && o.description.length > 0 ? `：${o.description.slice(0, 60)}` : ''}`).join('\n')}
+请点击选项按钮作答（亦可直接文字回复编号）`
             : isTask
               ? `${card.task.title}${card.task.summary.length > 0 ? `
 要点：${card.task.summary.slice(0, 120)}` : ''}
@@ -502,7 +503,7 @@ ${(card.question.detail ?? '').slice(0, 200)}` : ''}
 说明：${card.reason.slice(0, 120)}` : ''}
 请选择允许或拒绝（超时自动拒绝）`,
           button_list: isQuestion
-            ? card.question.options.map((o, idx) => ({ text: o.label.slice(0, 12), key: `qans:${card.token}:${idx}`, style: idx === 0 ? 1 : 2 }))
+            ? card.question.options.map((o, idx) => ({ text: `${idx + 1}·${o.label.slice(0, 6)}`, key: `qans:${card.token}:${idx}`, style: idx === 0 ? 1 : 2 }))
             : [
               { text: isTask ? '批准' : '允许', key: `approve:${card.token}`, style: 1 },
               { text: '拒绝', key: `deny:${card.token}`, style: 2 },
