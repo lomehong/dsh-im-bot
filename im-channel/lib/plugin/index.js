@@ -371,10 +371,13 @@ export function apply(ctx, config) {
         catch { /* 诊断静默 */ }
     };
     const consoleQuestionPending = new Map();
-    const samplePresence = () => {
+    /** P1.5 门控信号 v2（遥测实证：控制台活跃信号有未知自刷新源，弃用）：
+     *  engagedElsewhere = 排除提问会话自身后仍有其他 master-facing 会话在被服务
+     *  （纯 session/list，dsh-mind 0.10.17+；旧版 mind → undefined=信号缺席）。 */
+    const samplePresence = (excludeSessionId) => {
         try {
             const mind = ctx.get('dsh-mind');
-            return mind?.presenceState?.();
+            return mind?.presenceState?.({ ...(excludeSessionId !== undefined ? { excludeSessionId } : {}) });
         }
         catch {
             return undefined;
@@ -417,11 +420,11 @@ export function apply(ctx, config) {
                         return;
                     }
                     const ps = samplePresence();
-                    if (ps?.atComputer === true) {
-                        escDebug(`提问 ${info.callId}: 主人在场，60s 重查`);
+                    if (ps?.engagedElsewhere === true) {
+                        escDebug(`提问 ${info.callId}: 主人在别处对话中，60s 重查`);
                         continue;
                     }
-                    if (ps?.atComputer === false)
+                    if (ps?.engagedElsewhere === false)
                         break;
                     unknownTries += 1;
                     if (unknownTries >= 3) {
@@ -493,9 +496,9 @@ export function apply(ctx, config) {
                 escDebug('ask 跳过: 无法定位会话（无 agent）');
                 return originalAsk(request);
             }
-            const away = samplePresence()?.atComputer === false;
-            escDebug(`ask 触发: 在电脑旁=${!away} 单问题=${single} driverOwned=${driverOwned} 有agent=${agentObj !== undefined}`);
-            if (!single || driverOwned || !away || agentObj === undefined)
+            const elsewhere = samplePresence(sessionId)?.engagedElsewhere === true;
+            escDebug(`ask 触发: 别处有对话=${elsewhere} 单问题=${single} driverOwned=${driverOwned} 有agent=${agentObj !== undefined}`);
+            if (!single || driverOwned || elsewhere || agentObj === undefined)
                 return originalAsk(request);
             const callId = `esc_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
             escDebug(`ask 源头升级: callId=${callId} 限时 10 分钟`);

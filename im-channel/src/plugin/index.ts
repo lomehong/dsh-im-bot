@@ -393,10 +393,13 @@ const driver = new HarnessDriver(ctx, {
     ownerUserIds: Array<{ kind: string; userId: string }>
     resolve: (answer: QuestionAnswer) => void
   }>()
-  const samplePresence = (): { atComputer?: boolean; atComputerSource?: string } | undefined => {
+  /** P1.5 门控信号 v2（遥测实证：控制台活跃信号有未知自刷新源，弃用）：
+   *  engagedElsewhere = 排除提问会话自身后仍有其他 master-facing 会话在被服务
+   *  （纯 session/list，dsh-mind 0.10.17+；旧版 mind → undefined=信号缺席）。 */
+  const samplePresence = (excludeSessionId?: string): { engagedElsewhere?: boolean } | undefined => {
     try {
-      const mind = (ctx as unknown as { get(name: string): unknown }).get('dsh-mind') as { presenceState?: () => { atComputer?: boolean; atComputerSource?: string } } | undefined
-      return mind?.presenceState?.()
+      const mind = (ctx as unknown as { get(name: string): unknown }).get('dsh-mind') as { presenceState?: (o?: { excludeSessionId?: string }) => { engagedElsewhere?: boolean } } | undefined
+      return mind?.presenceState?.({ ...(excludeSessionId !== undefined ? { excludeSessionId } : {}) })
     } catch { return undefined }
   }
   const consoleMasterTargets = (): Array<{ kind: 'feishu' | 'wechat' | 'wecom'; userId: string }> => {
@@ -435,8 +438,8 @@ const driver = new HarnessDriver(ctx, {
           ])
           if (settled) { escDebug(`提问 ${info.callId}: 已在别处回答，升级收尾`); return }
           const ps = samplePresence()
-          if (ps?.atComputer === true) { escDebug(`提问 ${info.callId}: 主人在场，60s 重查`); continue }
-          if (ps?.atComputer === false) break
+          if (ps?.engagedElsewhere === true) { escDebug(`提问 ${info.callId}: 主人在别处对话中，60s 重查`); continue }
+          if (ps?.engagedElsewhere === false) break
           unknownTries += 1
           if (unknownTries >= 3) {
              ctx.logger?.info?.(`提问 ${info.callId}：在场信号不可用，放弃 IM 升级（控制台可答）`)
@@ -494,9 +497,9 @@ const driver = new HarnessDriver(ctx, {
       const single = Array.isArray(req?.questions) && req.questions.length === 1
       const driverOwned = sessionId !== undefined && typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId)
       if (sessionId === undefined) { escDebug('ask 跳过: 无法定位会话（无 agent）'); return originalAsk(request) }
-      const away = samplePresence()?.atComputer === false
-      escDebug(`ask 触发: 在电脑旁=${!away} 单问题=${single} driverOwned=${driverOwned} 有agent=${agentObj !== undefined}`)
-      if (!single || driverOwned || !away || agentObj === undefined) return originalAsk(request)
+      const elsewhere = samplePresence(sessionId)?.engagedElsewhere === true
+      escDebug(`ask 触发: 别处有对话=${elsewhere} 单问题=${single} driverOwned=${driverOwned} 有agent=${agentObj !== undefined}`)
+      if (!single || driverOwned || elsewhere || agentObj === undefined) return originalAsk(request)
       const callId = `esc_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
       escDebug(`ask 源头升级: callId=${callId} 限时 10 分钟`)
       const questions = req.questions as QuestionItem[]
