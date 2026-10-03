@@ -489,6 +489,10 @@ export function apply(ctx, config) {
             const sessionId = agentObj?.session?.header?.id;
             const single = Array.isArray(req?.questions) && req.questions.length === 1;
             const driverOwned = sessionId !== undefined && typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId);
+            if (sessionId === undefined) {
+                escDebug('ask 跳过: 无法定位会话（无 agent）');
+                return originalAsk(request);
+            }
             const away = samplePresence()?.atComputer === false;
             escDebug(`ask 触发: 在电脑旁=${!away} 单问题=${single} driverOwned=${driverOwned} 有agent=${agentObj !== undefined}`);
             if (!single || driverOwned || !away || agentObj === undefined)
