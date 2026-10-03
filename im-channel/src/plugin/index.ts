@@ -113,6 +113,8 @@ export function apply(ctx: Context, config: ImChannelSection): void {
   let disposeRouter: (() => void) | undefined
   /** P1.5 通用主人回复拦截器（跨插件注册；路由重建共享同一数组引用）。 */
   const ownerReplyInterceptors: Array<(kind: 'feishu' | 'wechat' | 'wecom', ownerUserId: string, text: string) => boolean> = []
+  /** P1.5 待决控制台提问（企微答案器）：拦截器命中后 resolve。 */
+  const pendingConsoleAsks: Array<{ ownerUserIds: Array<{ kind: string; userId: string }>; questions: QuestionItem[]; resolve: (answer: QuestionAnswer) => void }> = []
   // 暴露 im-channel 服务：其他插件（如 yuyi）可主动推送消息到 IM 用户。
   // 路由在设置变更时会重建，服务通过闭包始终指向当前实例。
   ;(ctx as unknown as { provide: (name: string, value: unknown) => void }).provide('im-channel', {
@@ -497,62 +499,43 @@ const driver = new HarnessDriver(ctx, {
     // 在场门控 v3：engagedElsewhere（排除提问会话自身的纯 session/list 信号，
     // 不受控制台活跃信号未知自刷新源影响）——别处有对话 → 不打扰。
     // IM 来源会话跳过（已有 questionBridge 全链路）。
+    // P1.5 最终设计（第十轮实证后推倒重来）：主人不在电脑旁（别处无对话）时，
+    // 本插件直接作为答案器——拦截 ask，推企微编号选项卡，企微回复即答案，
+    // 包装器把答案作为 ask 的返回值交给工具——模型带着答案继续。
+    // 无 waterfall、无 callId、无投影轮询、无挂起窗口。10 分钟未回复 → 报错
+    // 返回（模型可稍后再问）。在场（engagedElsewhere）/IM 来源/多问题 → 原样放行。
     uq.ask = async (request: unknown): Promise<unknown> => {
       const req = request as { questions?: QuestionItem[]; agent?: unknown; signal?: AbortSignal }
       const agentObj = req?.agent ?? agentsSvc?.currentInitiator?.()
       const sessionId = (agentObj as { session?: { header?: { id?: string } } } | undefined)?.session?.header?.id
       const single = Array.isArray(req?.questions) && req.questions.length === 1
-      const projSession = agentObj as { session?: unknown } | undefined
       const driverOwned = sessionId !== undefined && typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId)
       if (sessionId === undefined || !single || driverOwned || agentObj === undefined) return originalAsk(request)
       const elsewhere = samplePresence(sessionId)?.engagedElsewhere === true
-      escDebug(`ask 触发: 别处有对话=${elsewhere} 单问题=${single} driverOwned=${driverOwned}`)
-      if (elsewhere) return originalAsk(request)
+      if (!elsewhere) return originalAsk(request)
       const questions = req.questions as QuestionItem[]
       const targets = consoleMasterTargets()
-      if (targets.length === 0) { escDebug('masterTargets 为空——不升级'); return originalAsk(request) }
-      const askPromise = originalAsk(request)
-      // 从 sessionProjections 轮询捕获本次提问的 callId（tool/call 事件入投影）
-      let callId: string | undefined
-      for (let i = 0; i < 20; i++) {
-        await new Promise(resolve => setTimeout(resolve, 250))
-        try {
-          const proj = (ctx as unknown as { get(name: string): unknown }).get('sessionProjections') as {
-            stateOf?: (session: unknown, key: string) => { questions?: { active?: Array<{ callId: string; state: string }> } } | undefined
-          } | undefined
-          const view = proj?.stateOf?.((projSession as { session?: unknown } | undefined)?.session, 'userQuestions')
-          const open = (view?.questions?.active ?? []).filter(q => q.state === 'open' || q.state === 'continued')
-          if (open.length > 0) { callId = open[open.length - 1].callId; break }
-        } catch { /* 单次轮询失败重试 */ }
-      }
-      if (callId === undefined) { escDebug('未能从投影捕获 callId——放行原 ask（不升级）'); return askPromise }
-      escDebug(`callId 捕获: ${callId}——推送企微编号选项卡`)
-      let resolveAnswer: (answer: QuestionAnswer) => void = () => {}
-      const answerPromise = new Promise<QuestionAnswer>(resolve => { resolveAnswer = resolve })
-      consoleQuestionPending.set(`${sessionId}:${callId}`, {
-        sessionId, callId, questions, agentObj,
-        ownerUserIds: targets.map(t => ({ kind: t.kind, userId: t.userId })), resolve: resolveAnswer,
-      })
-      const card = `${questionText(questions)}
-（主人不在电脑旁——直接回复选项编号或内容即作答）`
+      if (targets.length === 0) return originalAsk(request)
+      const q = questions[0]
+      const optionLines = (q.options ?? []).map((o, i) => `${i + 1}. ${o.label}${o.description !== undefined && o.description !== '' ? `（${o.description}）` : ''}`)
+      const card = `❓ ${q.question}${q.detail !== undefined && q.detail !== '' ? `\n${q.detail}` : ''}
+${optionLines.join('\n')}
+（主人不在电脑旁——直接回复编号或选项文字即作答；10 分钟内未回复本次提问将取消）`
+      escDebug(`拦截 ask 升级企微: session=${sessionId.slice(0, 10)}… 题数=1`)
+      const ownerUserIds = targets.map(t => ({ kind: t.kind, userId: t.userId }))
+      pendingConsoleAsks.push({ ownerUserIds, questions, resolve: resolveAsk })
       for (const t of targets) {
         try { void router?.pushToUser(t.kind, t.userId, card, { markdown: true }) } catch { /* 单目标失败不阻断 */ }
       }
-      // 竞速：企微答案 vs 控制台/网页答案（askPromise 自行解决）
-      const winner = await Promise.race([
-        answerPromise.then(a => ({ source: 'im' as const, answer: a })),
-        askPromise.then(() => ({ source: 'console' as const })),
-      ])
-      consoleQuestionPending.delete(`${sessionId}:${callId}`)
-      if (winner.source === 'im') {
-        // 企微答案 → userQuestions.answer（与网页点选完全同构）→ 原问解除
-        let ok = false
-        try { ok = uq.answer(agentObj, callId, winner.answer) === true } catch (e) { escDebug(`answer 异常: ${e instanceof Error ? e.message : String(e)}`) }
-        escDebug(`answer 回注: ok=${ok}`)
-        const feedback = ok ? '✅ 回答已注入会话，会话继续。' : '❌ 回注失败——请在控制台重新提问。'
-        for (const t of targets) { try { void router?.pushToUser(t.kind, t.userId, feedback, { markdown: true }) } catch { /* 静默 */ } }
-      }
-      return askPromise
+      let resolveAsk!: (answer: QuestionAnswer) => void
+      const answer = await new Promise<QuestionAnswer>((resolve, reject) => {
+        resolveAsk = resolve
+        setTimeout(() => reject(new Error('企微 10 分钟未回复，本次提问已取消——请稍后重新发起')), 600_000).unref?.()
+      })
+      const idx = pendingConsoleAsks.findIndex(p => p.resolve === resolveAsk)
+      if (idx >= 0) pendingConsoleAsks.splice(idx, 1)
+      escDebug(`企微答案已回: 题目=${q.id} 选项=${answer.answers[0]?.selected.join('/') ?? ''} 自由文本=${answer.answers[0]?.custom ?? '无'}`)
+      return { answers: questions.map(qq => qq.id === q.id ? answer.answers[0] : { id: qq.id, selected: [], custom: '' }) }
     }
     // P1.5：askTimed 保持原样（源头上升级直接调用它；不再单独包装——旧包装
     // 会与 ask 包装叠加成双升级）。askTimed 内部的 this.ask 回调由 ask 包装
@@ -575,6 +558,16 @@ const driver = new HarnessDriver(ctx, {
     ctx.logger?.info?.('[im-channel] 控制台提问升级已启用（askTimed 包装 + 在场门控 + 离开沿触发；单问题批次）')
   })
 
+    // 企微回复 → 解析答案 → resolve 待决 ask（10 分钟超时则报错）
+    ownerReplyInterceptors.push((kind, ownerUserId, text) => {
+      const prefix = section.read().commandPrefix || '/'
+      if (text.startsWith(prefix)) return false
+      const pendingAsk = pendingConsoleAsks.find(p => p.ownerUserIds.some(t => t.userId === ownerUserId))
+      if (pendingAsk === undefined) return false
+      const answerItem = answerForQuestion(pendingAsk.questions[0], text)
+      pendingAsk.resolve({ answers: [answerItem] })
+      return true
+    })
   /** Rebuild the router from the current declared instances: dispose the old one, then build channels for every credentialled enabled instance. */
   const rebuildRouter = (): void => {
     const next = section.read()
