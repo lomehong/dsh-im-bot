@@ -488,7 +488,9 @@ export class HarnessDriver {
         try {
             const msg = createUserMessage({
                 content: [{ type: 'text', text: summary }],
-                source: { kind: 'dsh-memory' },
+                // P1.5 v4 规范来源：'plugin' 已废弃；dsh-memory 的规范生产者 kind
+                // （v3→v4 迁移器 producerKind fallback 映射）。类型联合未更新，断言。
+                source: { kind: 'plugin:dsh-memory' },
             });
             // inject 方法将消息注入到 agent 的上下文中，不唤醒驱动
             agent.inject(msg);
@@ -613,7 +615,7 @@ export class HarnessDriver {
                 const memory = this.ctx.get('dsh-memory');
                 const pack = memory?.assemblePack?.(options.userId ?? 'unknown', options.isMaster === true, text);
                 if (pack !== undefined && pack.text !== '') {
-                    record.agent.inject(createUserMessage({ content: [{ type: 'text', text: pack.text }], source: { kind: 'dsh-memory' } }));
+                    record.agent.inject(createUserMessage({ content: [{ type: 'text', text: pack.text }], source: { kind: 'plugin:dsh-memory' } }));
                 }
             }
             catch { /* 装配失败：跳过本轮记忆注入 */ }
