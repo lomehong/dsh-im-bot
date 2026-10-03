@@ -483,32 +483,55 @@ const driver = new HarnessDriver(ctx, {
     // 从 agents.currentInitiator() 取调用链上的发起 Agent。
     const agentsSvc = (ctx as unknown as { get(name: string): unknown }).get('agents') as { currentInitiator?: () => unknown } | undefined
     const originalAsk = uq.ask.bind(uq)
-    uq.ask = (request: unknown): Promise<unknown> => {
-      const promise = originalAsk(request)
-      const dbg = request as { questions?: unknown; wait?: { callId?: string }; agent?: unknown }
-      escDebug(`ask 包装触发: callId=${dbg?.wait?.callId ?? '无'} 有agent=${dbg?.agent !== undefined} 题数=${Array.isArray(dbg?.questions) ? dbg.questions.length : '非数组'}`)
-      try {
-        const req = request as { questions?: QuestionItem[]; wait?: { callId?: string }; agent?: unknown }
-        const callId = req?.wait?.callId
-        const agentObj = req?.agent ?? agentsSvc?.currentInitiator?.()
-        const sessionId = (agentObj as { session?: { header?: { id?: string } } } | undefined)?.session?.header?.id
-        const questions = req?.questions
-        if (callId === undefined || sessionId === undefined || !Array.isArray(questions)) {
-          escDebug(`ask 跳过: callId=${callId === undefined ? '缺' : '有'} sessionId=${sessionId === undefined ? '缺' : sessionId.slice(0, 8)} 题数=${Array.isArray(questions) ? questions.length : '非数组'}`)
-        } else {
-          const driverOwns = typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId)
-          if (driverOwns === true) {
-            escDebug(`ask 跳过: driver 自有会话（IM 来源）`)
-          } else if (questions.length !== 1) {
-            escDebug(`ask 跳过: 多问题批次（${questions.length}）`)
-          } else {
-            escalateConsoleQuestion({ sessionId, callId, questions: questions as QuestionItem[], agentObj, promise })
-          }
-        }
-      } catch (e) {
-        ctx.logger?.warn?.('[im-channel] 提问升级协程异常（忽略）:', e instanceof Error ? e.message : String(e))
+    // P1.5 核心机制（调研定稿）：untimed ask（宿主工具默认 timeout=-1）没有
+    // callId，无法被外部回注——正解是「源头升级」：主人不在电脑旁时，包装器
+    // 把控制台提问改调 askTimed（10 分钟限时 + 升级器自造 callId），企微答案
+    // 经 userQuestions.answer(自造 callId) 回注——宿主设计内的合法路径。
+    uq.ask = async (request: unknown): Promise<unknown> => {
+      const req = request as { questions?: QuestionItem[]; agent?: unknown; signal?: AbortSignal }
+      const agentObj = req?.agent ?? agentsSvc?.currentInitiator?.()
+      const sessionId = (agentObj as { session?: { header?: { id?: string } } } | undefined)?.session?.header?.id
+      const single = Array.isArray(req?.questions) && req.questions.length === 1
+      const driverOwned = sessionId !== undefined && typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId)
+      const away = samplePresence()?.atComputer === false
+      escDebug(`ask 触发: 在电脑旁=${!away} 单问题=${single} driverOwned=${driverOwned} 有agent=${agentObj !== undefined}`)
+      if (!single || driverOwned || !away || agentObj === undefined) return originalAsk(request)
+      const callId = `esc_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+      escDebug(`ask 源头升级: callId=${callId} 限时 10 分钟`)
+      const questions = req.questions as QuestionItem[]
+      const targets = consoleMasterTargets()
+      if (targets.length === 0) {
+        escDebug('masterTargets 为空——回退 untimed ask')
+        return originalAsk(request)
       }
-      return promise
+      const askTimedPromise = uq.askTimed({ ...req, agent: agentObj }, callId, 10 * 60 * 1000)
+      let resolveAnswer: (answer: QuestionAnswer) => void = () => {}
+      const answerPromise = new Promise<QuestionAnswer>(resolve => { resolveAnswer = resolve })
+      const sessId: string = sessionId
+      consoleQuestionPending.set(`${sessId}:${callId}`, {
+        sessionId: sessId, callId, questions, agentObj,
+        ownerUserIds: targets.map(t => ({ kind: t.kind, userId: t.userId })), resolve: resolveAnswer,
+      })
+      const card = `${questionText(questions)}
+（主人不在电脑旁——直接回复选项编号或内容即作答；来自会话 ${(sessionId ?? '').slice(0, 8)}…）`
+      for (const t of targets) {
+        try { void router?.pushToUser(t.kind, t.userId, card, { markdown: true }) } catch { /* 单目标失败不阻断 */ }
+      }
+      const winner = await Promise.race([
+        answerPromise.then(a => ({ source: 'im' as const, answer: a })),
+        askTimedPromise.then(() => ({ source: 'web-or-timeout' as const })),
+      ])
+      consoleQuestionPending.delete(`${sessionId}:${callId}`)
+      if (winner.source === 'im') {
+        const ok = uq.answer(agentObj, callId, winner.answer)
+        escDebug(`answer 回注: ok=${ok}`)
+        if (!ok) {
+          for (const t of targets) { try { void router?.pushToUser(t.kind, t.userId, '❌ 回注失败：会话可能已更替——请在控制台重新提问。', { markdown: true }) } catch { /* 静默 */ } }
+        }
+        return askTimedPromise
+      }
+      for (const t of targets) { try { void router?.pushToUser(t.kind, t.userId, 'ℹ️ 该问题已在控制台处理或已超时挂起。', { markdown: true }) } catch { /* 静默 */ } }
+      return askTimedPromise
     }
     const originalAskTimed = uq.askTimed.bind(uq)
     uq.askTimed = (request: unknown, callId: string, timeoutMs: number): Promise<unknown> => {
