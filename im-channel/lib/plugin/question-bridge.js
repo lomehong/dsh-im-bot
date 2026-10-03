@@ -9,7 +9,7 @@
  * Rendering and answer mapping follow xmanrui/dsh-im's harness-question.mjs.
  */
 /** How long the user has to answer before the ask rejects. */
-export const QUESTION_TIMEOUT_MS = 10 * 60_000;
+export const QUESTION_TIMEOUT_MS = 30 * 60_000;
 /** Map one reply token to an option label; numbers index the option list. */
 function optionLabel(token, options) {
     const normalized = token.trim();

@@ -10,7 +10,7 @@
  */
 
 /** How long the user has to answer before the ask rejects. */
-export const QUESTION_TIMEOUT_MS = 10 * 60_000
+export const QUESTION_TIMEOUT_MS = 30 * 60_000
 
 export interface QuestionOption { label: string; description?: string }
 export interface QuestionItem {
