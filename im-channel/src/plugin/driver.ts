@@ -557,7 +557,7 @@ export class HarnessDriver implements AgentDriver {
     try {
       const msg = createUserMessage({
         content: [{ type: 'text', text: summary }],
-        source: { kind: 'plugin', plugin: 'dsh-memory' },
+        source: { kind: 'dsh-memory' },
       })
       // inject 方法将消息注入到 agent 的上下文中，不唤醒驱动
       agent.inject(msg)
@@ -679,7 +679,7 @@ export class HarnessDriver implements AgentDriver {
           | undefined
         const pack = memory?.assemblePack?.(options.userId ?? 'unknown', options.isMaster === true, text)
         if (pack !== undefined && pack.text !== '') {
-          record!.agent.inject(createUserMessage({ content: [{ type: 'text', text: pack.text }], source: { kind: 'plugin', plugin: 'dsh-memory' } }))
+          record!.agent.inject(createUserMessage({ content: [{ type: 'text', text: pack.text }], source: { kind: 'dsh-memory' } }))
         }
       } catch { /* 装配失败：跳过本轮记忆注入 */ }
     }

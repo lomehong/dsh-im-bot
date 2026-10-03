@@ -531,7 +531,7 @@ const driver = new HarnessDriver(ctx, {
       const owner = store.ownerFor('wecom')
       if (owner === undefined) { escDebug('企微未绑定 Owner——放行原 ask'); return originalAsk(request) }
       escDebug(`ask 升级企微问答桥: session=${sessionId.slice(0, 10)}… 题数=1`)
-      const buttonToken = `q_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+      const buttonToken = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
       const answer = await questionBridge.ask('wecom', owner.userId, questions, { buttonToken, useCard: true })
       escDebug(`企微答案已回: ${answer.answers.map(a => [...a.selected, a.custom ?? ''].join('/')).join('；')}`)
       return answer
