@@ -535,8 +535,13 @@ const driver = new HarnessDriver(ctx, {
       const single = Array.isArray(req?.questions) && req.questions.length === 1
       const driverOwned = sessionId !== undefined && typeof driver?.ownsSession === 'function' && driver.ownsSession(sessionId)
       if (sessionId === undefined || !single || driverOwned || agentObj === undefined) return originalAsk(request)
-      const elsewhere = samplePresence(sessionId)?.engagedElsewhere === true
-      if (elsewhere) return originalAsk(request)
+      // P1.5 门控终版（主人确认原始需求）：仅当主人不在 dsh 控制台前
+      // （atComputer=false，控制台键鼠静默超 2 分钟）才升级企微；在控制台前
+      // → 原样放行（问题卡照常在对话区出现）。
+      const presence = samplePresence(sessionId)
+      const away = presence?.atComputer === false
+      escDebug(`门控: atComputer=${presence?.atComputer ?? '未知'}（${presence?.atComputerSource ?? '-'}）→ ${away ? '离开，升级企微' : '在控制台前，放行'}`)
+      if (!away) return originalAsk(request)
       const questions = req.questions as QuestionItem[]
       const owner = store.ownerFor('wecom')
       if (owner === undefined) { escDebug('企微未绑定 Owner——放行原 ask'); return originalAsk(request) }
