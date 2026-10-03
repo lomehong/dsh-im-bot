@@ -514,7 +514,8 @@ const driver = new HarnessDriver(ctx, {
       if (sessionId === undefined) { escDebug('跳过: 无法定位会话'); return originalAsk(request) }
       const elsewhere = samplePresence(sessionId)?.engagedElsewhere === true
       escDebug(`门控: 别处有对话=${elsewhere}`)
-      if (!elsewhere) { escDebug('跳过: 主人不在别处被服务（按主人在场处理，控制台作答）'); return originalAsk(request) }
+      // P1.5 语义修正（主人拍板）：别处无对话（主人不在跟别的会话对话）= 需要企微升级；别处有对话 = 主人正忙于那个对话，不打扰（原样放行）
+      if (elsewhere) { escDebug('跳过: 主人正在别处对话——不打扰'); return originalAsk(request) }
       const questions = req.questions as QuestionItem[]
       const targets = consoleMasterTargets()
       if (targets.length === 0) { escDebug('跳过: masterTargets 为空'); return originalAsk(request) }
