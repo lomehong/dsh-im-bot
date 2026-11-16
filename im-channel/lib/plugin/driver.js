@@ -223,8 +223,21 @@ export class HarnessDriver {
             resumeSessionId: SessionId(sessionId),
             ...agentOptions === undefined ? {} : { agentOptions },
             setup: async (agentCtx) => {
+                // 2026-11-16 事故修正：重挂会话此前硬编码 mount(undefined)=全局默认
+                // 预设——全局默认被指到 DirectorX 后，IM 分身每次宿主重启重挂都会
+                // 变成「制片助理」人格。与 createAgent 同语义：显式 agentPreset 优先
+                // （设置项，如 'digital-twin'），解析失败回落默认，不得让重挂失败。
+                const presetId = this.options.agentPreset?.() || undefined;
+                let resolvedPreset;
+                try {
+                    resolvedPreset = presets === undefined ? undefined : await presets.resolve(presetId);
+                }
+                catch {
+                    resolvedPreset = undefined;
+                }
+                const mountId = resolvedPreset === undefined ? undefined : resolvedPreset.id;
                 if (presets !== undefined)
-                    await presets.mount(agentCtx, undefined);
+                    await presets.mount(agentCtx, mountId);
                 // 注册 MCP 工具
                 if (this.mcpRegistry !== undefined) {
                     await this.mcpRegistry.registerToAgent(agentCtx);
