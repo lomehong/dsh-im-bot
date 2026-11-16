@@ -329,8 +329,14 @@ export class LoginApi {
       const { configureWecomBot } = await import('../channels/wecom/login-bridge.ts')
       await configureWecomBot(body.botId, body.secret)
       // 自动创建通道实例；实例已存在时 onChange 不会触发，需自行拉起通道。
-      const existed = await this.ensureChannelInstance('wecom')
-      if (existed) await this.bringChannelUp('wecom')
+      // 2026-11-16 事故修正：existed=false（首次配置，实例行刚写入）时必须
+      // 同样拉起——settings 变更在 0.1.7 契约下不会触发路由重建（onChange
+      // 永不触发），跳过会让通道永远离线、/bind 无从发生（生产实证：
+      // 凭据已存、WSClient 从未发起连接、时间线/状态 online:false）。
+      // bringChannelUp 自带两条路：在线实例热重连并等认证，冷启动走
+      // reload() 全量重建，不依赖重启。
+      await this.ensureChannelInstance('wecom')
+      await this.bringChannelUp('wecom')
       // 如果当前有登录会话，标记为已确认
       if (this.session !== undefined && this.session.kind === 'wecom') {
         this.session.status = 'confirmed'
@@ -370,9 +376,11 @@ export class LoginApi {
         const poll = await this.wecomQrPolls.pollOnce(scode, async result => {
           const { configureWecomBot } = await import('../channels/wecom/login-bridge.ts')
           await configureWecomBot(result.botId, result.secret)
-          // 实例已存在时 onChange 不会触发，需自行拉起通道（冷启动 reload / 在线 reconnect）。
-          const existed = await this.ensureChannelInstance('wecom')
-          if (existed) await this.bringChannelUp('wecom')
+          // 实例已存在时 onChange 不会触发，需自行拉起通道（冷启动 reload / 在线
+          // reconnect）。2026-11-16 事故修正：首次扫码创建（existed=false）同样
+          // 必须拉起——settings 变更不触发路由重建，跳过会让新机器人永远离线。
+          await this.ensureChannelInstance('wecom')
+          await this.bringChannelUp('wecom')
           this.wecomQr = undefined
         })
         if (poll.status === 'success') {
