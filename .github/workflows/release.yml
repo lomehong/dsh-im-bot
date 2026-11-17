@@ -7,12 +7,42 @@ on:
 permissions:
   contents: write # 创建 GitHub Release 并上传 tarball
 
-# 两个子包（im-channel / ui-settings-im）各自构建、审计、上传到同一个 Release。
+# 发布纪律（2026-11-17 事故后改造）：
+# 事故：v0.2.30 只 bump 了 im-channel，ui-settings-im 仍是 0.2.28 → audit-pack 的
+# 「tag 与 version 一致」检查让该 leg 失败，但旧的矩阵里每个 leg 各自调用
+# softprops/action-gh-release 上传，于是 Release 照样建成了——少了
+# dsh-client-ui-settings-im-latest.tgz。安装器按 /releases/latest/download 取资产，
+# 拿到 404 → 「有插件尚未发布 Release」→ 整次安装中止。
+# 对策：① verify 先核「双子包版本 = tag」；② build 矩阵只产 artifact；
+#       ③ publish 依赖全部 build 成功后才一次性建 Release 上传——
+#          任一子包构建/审计失败即无 Release，不再出现「latest 指向缺资产的 tag」。
 jobs:
-  publish:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 双子包版本必须与 tag 锁步
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          fail=0
+          for dir in im-channel ui-settings-im; do
+            v=$(node -p "require('./$dir/package.json').version")
+            if [ "$v" != "$tag" ]; then
+              echo "::error file=$dir/package.json::version=$v 与 tag=$tag 不一致（先 bump 版本再打 tag）"
+              fail=1
+            fi
+          done
+          exit $fail
+
+  build:
+    needs: verify
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - dir: im-channel
@@ -49,10 +79,28 @@ jobs:
         working-directory: ${{ matrix.dir }}
       - run: cp ${{ matrix.glob }} ../${{ matrix.alias }}
         working-directory: ${{ matrix.dir }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.dir }}
+          if-no-files-found: error
+          path: |
+            ${{ matrix.dir }}/${{ matrix.glob }}
+            ${{ matrix.alias }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: 发布资产清单（缺任一即失败）
+        run: |
+          set -euo pipefail
+          ls -l artifacts
+          test -f artifacts/im-channel-latest.tgz
+          test -f artifacts/dsh-client-ui-settings-im-latest.tgz
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            im-channel/*.tgz
-            ui-settings-im/*.tgz
-            *-latest.tgz
-
+          files: artifacts/*.tgz
